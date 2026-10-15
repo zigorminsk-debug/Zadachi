@@ -12,6 +12,11 @@
         android:usesPermissionFlags="neverForLocation" />
     <!-- LAN with the PC -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Android 14: FGS type connectedDevice additionally requires at least
+         one companion permission from its list; CHANGE_NETWORK_STATE is a
+         normal (auto-granted) permission and matches our LAN use. Without
+         it, starting CallService crashes with SecurityException. -->
+    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
     <!-- Service only runs on allowed Wi-Fi networks -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />

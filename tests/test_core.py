@@ -125,6 +125,19 @@ class IconAssetsTest(unittest.TestCase):
         self.assertEqual(base.get("cleartextTrafficPermitted"), "true")
 
 
+class AndroidManifestTest(unittest.TestCase):
+    def test_connected_device_fgs_has_companion_permission(self):
+        # Regression: Android 14 crashes CallService with SecurityException
+        # ("Starting FGS with type connectedDevice ... requires permissions")
+        # unless a companion permission such as CHANGE_NETWORK_STATE is held.
+        path = os.path.join(os.path.dirname(__file__), "..", "android",
+                            "app", "src", "main", "AndroidManifest.xml")
+        manifest = open(path, encoding="utf-8").read()
+        self.assertIn("android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE", manifest)
+        self.assertIn("android.permission.CHANGE_NETWORK_STATE", manifest)
+        self.assertIn('android:foregroundServiceType="connectedDevice"', manifest)
+
+
 class StartupTest(unittest.TestCase):
     def test_autostart_goes_to_tray_but_manual_launch_does_not(self):
         # Autostart entry must start hidden; the exe itself without

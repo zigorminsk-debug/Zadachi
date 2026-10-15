@@ -15,6 +15,7 @@ import android.os.Build;
 import android.os.IBinder;
 import android.os.PowerManager;
 import android.telephony.TelephonyManager;
+import android.util.Log;
 
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
@@ -53,7 +54,10 @@ public class CallService extends Service {
     public void onCreate() {
         super.onCreate();
         io = Executors.newCachedThreadPool();
-        startForegroundNotification();
+        if (!startForegroundNotification()) {
+            stopSelf();
+            return;
+        }
         registerPhoneReceiver();
         running = true;
         io.execute(this::serverLoop);
@@ -76,7 +80,7 @@ public class CallService extends Service {
     }
 
     // ------------------------------------------------------------ foreground
-    private void startForegroundNotification() {
+    private boolean startForegroundNotification() {
         NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
         if (Build.VERSION.SDK_INT >= 26 && nm != null) {
             NotificationChannel ch = new NotificationChannel(
@@ -96,10 +100,18 @@ public class CallService extends Service {
                 .setContentIntent(pi)
                 .setOngoing(true)
                 .build();
-        if (Build.VERSION.SDK_INT >= 34) {
-            startForeground(1, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE);
-        } else {
-            startForeground(1, n);
+        try {
+            if (Build.VERSION.SDK_INT >= 34) {
+                startForeground(1, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE);
+            } else {
+                startForeground(1, n);
+            }
+            return true;
+        } catch (RuntimeException e) {
+            // E.g. SecurityException if Android tightens FGS-type rules.
+            // Stop this service instead of taking down the whole process.
+            Log.e("Zadachi", "Unable to enter foreground mode", e);
+            return false;
         }
     }
 

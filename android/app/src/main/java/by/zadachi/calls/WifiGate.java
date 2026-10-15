@@ -6,6 +6,7 @@ import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.os.Build;
+import android.util.Log;
 
 import java.util.concurrent.TimeUnit;
 
@@ -37,14 +38,19 @@ final class WifiGate {
 
     /** Start/stop CallService to match the current Wi-Fi network. */
     static void evaluate(Context c) {
-        Prefs prefs = new Prefs(c);
-        String ssid = Net.currentSsid(c);
-        if (prefs.isActiveHere(ssid)) {
-            Intent i = new Intent(c, CallService.class);
-            if (Build.VERSION.SDK_INT >= 26) c.startForegroundService(i);
-            else c.startService(i);
-        } else {
-            c.stopService(new Intent(c, CallService.class));
+        try {
+            Prefs prefs = new Prefs(c);
+            String ssid = Net.currentSsid(c);
+            if (prefs.isActiveHere(ssid)) {
+                Intent i = new Intent(c, CallService.class);
+                if (Build.VERSION.SDK_INT >= 26) c.startForegroundService(i);
+                else c.startService(i);
+            } else {
+                c.stopService(new Intent(c, CallService.class));
+            }
+        } catch (RuntimeException e) {
+            // Never let a platform FGS restriction crash the whole app.
+            Log.e("Zadachi", "Unable to update CallService for current Wi-Fi", e);
         }
     }
 }
