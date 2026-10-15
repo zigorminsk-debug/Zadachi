@@ -68,6 +68,14 @@ class TrayIcon:
         user32.DestroyWindow.argtypes = [wintypes.HWND]
         user32.LoadIconW.restype = wintypes.HICON
         user32.LoadIconW.argtypes = [wintypes.HINSTANCE, ctypes.c_void_p]
+        # LoadImageW also returns a handle: without an explicit restype,
+        # ctypes would truncate it to 32 bits on 64-bit Windows.
+        user32.LoadImageW.restype = wintypes.HICON
+        user32.LoadImageW.argtypes = [
+            wintypes.HINSTANCE, wintypes.LPCWSTR, wintypes.UINT,
+            ctypes.c_int, ctypes.c_int, wintypes.UINT]
+        user32.GetSystemMetrics.restype = ctypes.c_int
+        user32.GetSystemMetrics.argtypes = [ctypes.c_int]
         shell32.Shell_NotifyIconW.restype = wintypes.BOOL
         shell32.Shell_NotifyIconW.argtypes = [wintypes.DWORD, ctypes.c_void_p]
 
@@ -76,10 +84,13 @@ class TrayIcon:
         def wndproc(hwnd, msg, wparam, lparam):
             if msg == WM_TRAY:
                 event = lparam & 0xFFFF
-                if event in (WM_LBUTTONUP, WM_LBUTTONDBLCLK):
-                    root.after(0, self.on_restore)
-                elif event == WM_RBUTTONUP and self.on_menu:
-                    root.after(0, self.on_menu)
+                try:
+                    if event in (WM_LBUTTONUP, WM_LBUTTONDBLCLK):
+                        root.after(0, self.on_restore)
+                    elif event == WM_RBUTTONUP and self.on_menu:
+                        root.after(0, self.on_menu)
+                except Exception:
+                    pass
                 return 0
             return user32.DefWindowProcW(hwnd, msg, wparam, lparam)
 
@@ -138,8 +149,14 @@ class TrayIcon:
         import os
         if self.icon_path and os.path.isfile(self.icon_path):
             IMAGE_ICON, LR_LOADFROMFILE = 1, 0x0010
-            hicon = user32.LoadImageW(None, self.icon_path, IMAGE_ICON, 0, 0,
-                                      LR_LOADFROMFILE)
+            SM_CXSMICON, SM_CYSMICON = 49, 50
+            try:
+                cx = user32.GetSystemMetrics(SM_CXSMICON)
+                cy = user32.GetSystemMetrics(SM_CYSMICON)
+            except Exception:
+                cx = cy = 0
+            hicon = user32.LoadImageW(None, self.icon_path, IMAGE_ICON,
+                                      cx, cy, LR_LOADFROMFILE)
             if hicon:
                 return hicon
         return user32.LoadIconW(0, ctypes.cast(IDI_APPLICATION, ctypes.c_void_p))

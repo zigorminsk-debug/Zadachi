@@ -1,6 +1,6 @@
 # PyInstaller spec (used by GitHub Actions and build.bat)
 # One self-contained .exe, no Python required on the target PC.
-a = Analysis(['Zadachi.py'], pathex=['.'], binaries=[], datas=[('icon.ico', '.')],
+a = Analysis(['Zadachi.py'], pathex=['.'], binaries=[], datas=[('icon.ico', '.'), ('icon.png', '.')],
              hiddenimports=[], hookspath=[], runtime_hooks=[],
              excludes=['test', 'unittest'], noarchive=False)
 pyz = PYZ(a.pure, a.zipped_data)

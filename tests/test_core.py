@@ -226,6 +226,19 @@ class IconAssetsTest(unittest.TestCase):
         with open(path, "rb") as f:
             self.assertEqual(f.read(4), b"\x00\x00\x01\x00")  # ICO magic
 
+    def test_windows_ico_has_titlebar_and_tray_sizes(self):
+        import struct
+        path = os.path.join(self.ROOT, "windows", "icon.ico")
+        data = open(path, "rb").read()
+        reserved, kind, count = struct.unpack_from("<HHH", data, 0)
+        self.assertEqual((reserved, kind), (0, 1))
+        sizes = set()
+        for i in range(count):
+            width, height = struct.unpack_from("<BB", data, 6 + i * 16)
+            sizes.add((width or 256, height or 256))
+        self.assertTrue({(16, 16), (20, 20), (24, 24), (32, 32),
+                         (48, 48), (256, 256)}.issubset(sizes))
+
     def test_android_launcher_sizes(self):
         res = os.path.join(self.ROOT, "android", "app", "src", "main", "res")
         self.assertEqual(self._png_size(os.path.join(
@@ -379,6 +392,31 @@ class StartupTest(unittest.TestCase):
         tray = TrayIcon(object(), lambda: None)
         self.assertFalse(tray._added)
         tray.remove()  # must not raise
+
+    def test_window_icon_and_minimize_button_go_to_tray(self):
+        root = os.path.join(os.path.dirname(__file__), "..")
+        app = open(os.path.join(root, "windows", "zadachi", "app.py"),
+                   encoding="utf-8").read()
+        tray = open(os.path.join(root, "windows", "zadachi", "tray.py"),
+                    encoding="utf-8").read()
+        spec = open(os.path.join(root, "windows", "zadachi.spec"),
+                    encoding="utf-8").read()
+
+        # The main window must not keep Tk's stock icon, and the tray
+        # must receive a real ICO path (this was previously undefined).
+        self.assertIn("self._icon_path = apply_window_icon(self)", app)
+        self.assertIn("window.iconbitmap(default=icon)", app)
+        self.assertIn("icon_path=self._icon_path", app)
+        self.assertIn("('icon.png', '.')", spec)
+        # Clicking minimize (not only the X button) hides to the tray.
+        self.assertIn('self.bind("<Unmap>", self._on_unmap)', app)
+        self.assertIn('if self.state() == "iconic"', app)
+        self.assertIn("def _hide_to_tray", app)
+        self.assertIn("Свернуть и закрытие окна — в трей у часов", app)
+        # The tray must load the small ICO frame without truncating the
+        # 64-bit HICON handle.
+        self.assertIn("user32.LoadImageW.restype = wintypes.HICON", tray)
+        self.assertIn("SM_CXSMICON", tray)
 
 
 if __name__ == "__main__":

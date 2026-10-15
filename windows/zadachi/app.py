@@ -146,12 +146,53 @@ def find_icon_path():
     return ""
 
 
+def find_icon_image_path():
+    """PNG version of the icon (Tk fallback outside Windows)."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    candidates = [
+        os.path.join(getattr(sys, "_MEIPASS", ""), "icon.png"),
+        os.path.join(os.path.dirname(sys.executable), "icon.png"),
+        os.path.join(os.path.dirname(here), "icon.png"),          # windows/icon.png (dev)
+        os.path.join(os.getcwd(), "icon.png"),
+    ]
+    for p in candidates:
+        if p and os.path.isfile(p):
+            return p
+    return ""
+
+
+def apply_window_icon(window):
+    """Give a Tk window the Zadachi icon; returns the ICO path (if any).
+
+    On Windows the ICO is registered as the default icon, so the main
+    window, dialogs, taskbar button and Alt-Tab entry all stop using
+    Tk's stock feather. Elsewhere the bundled PNG is used instead.
+    """
+    icon = find_icon_path()
+    if sys.platform == "win32" and icon:
+        try:
+            window.iconbitmap(default=icon)
+            return icon
+        except tk.TclError:
+            pass
+    image_path = find_icon_image_path()
+    if image_path:
+        try:
+            photo = tk.PhotoImage(file=image_path)
+            window.iconphoto(True, photo)
+            window._zadachi_icon_photo = photo  # keep a reference alive
+        except tk.TclError:
+            pass
+    return icon
+
+
 class ZadachiApp(tk.Tk):
     def __init__(self, start_in_tray: bool = False):
         super().__init__()
         self.title("Zadachi — звонки и задачи")
         self.geometry("860x560")
         self.minsize(720, 460)
+        self._icon_path = apply_window_icon(self)
 
         self.settings = Settings()
         self.db = Database()
@@ -186,14 +227,10 @@ class ZadachiApp(tk.Tk):
             self._set_status(f"Не удалось запустить сервер: {exc}")
 
         # Tray is optional decoration: it must NEVER kill the app window.
-        if self.settings.get("minimize_to_tray", True):
-            try:
-                self.tray = TrayIcon(self, self._restore, self._tray_menu,
-                                     icon_path=self._icon_path)
-            except Exception:
-                self.tray = None
-                log_error("tray icon init failed (continuing without tray)")
+        self._ensure_tray_icon()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
+        # Clicking the window's minimize button sends it to the tray.
+        self.bind("<Unmap>", self._on_unmap)
 
         self.after(300, self._poll_events)
         self.after(1500, self._check_reminders)
@@ -204,7 +241,7 @@ class ZadachiApp(tk.Tk):
 
         # A manual launch always shows the window; only the Windows
         # autostart entry passes --tray and starts hidden in background.
-        if start_in_tray and self.tray is not None:
+        if start_in_tray and self._tray_ready():
             self.withdraw()
         else:
             self.state("normal")
@@ -293,7 +330,7 @@ class ZadachiApp(tk.Tk):
         self.sound_var = tk.BooleanVar(value=bool(self.settings.get("sound", True)))
         for i, (var, text) in enumerate((
                 (self.autostart_var, "Запускать вместе с Windows (фон)"),
-                (self.tray_var, "Закрытие окна — сворачивать в трей"),
+                (self.tray_var, "Свернуть и закрытие окна — в трей у часов"),
                 (self.clip_var, "Следить за буфером обмена (номера для звонка)"),
                 (self.tel_var, "Номера-ссылки tel: на сайтах — звонить через телефон"),
                 (self.sound_var, "Звук напоминаний"))):
@@ -865,8 +902,59 @@ class ZadachiApp(tk.Tk):
         self.settings.set("sound", bool(self.sound_var.get()))
         autostart_mod.set_autostart(bool(self.autostart_var.get()))
         telhandler.set_tel_handler(bool(self.tel_var.get()))
+        self._sync_tray_icon()
 
     # ---------------------------------------------------------------- tray
+    def _ensure_tray_icon(self):
+        """Create the notification-area icon when the setting allows it."""
+        if not self.settings.get("minimize_to_tray", True):
+            return
+        if self.tray is not None:
+            return
+        try:
+            self.tray = TrayIcon(self, self._restore, self._tray_menu,
+                                 icon_path=self._icon_path)
+        except Exception:
+            self.tray = None
+            log_error("tray icon init failed (continuing without tray)")
+
+    def _sync_tray_icon(self):
+        """Apply the tray checkbox immediately, not after a restart."""
+        if self.settings.get("minimize_to_tray", True):
+            self._ensure_tray_icon()
+        elif self.tray is not None:
+            self.tray.remove()
+            self.tray = None
+
+    def _tray_ready(self):
+        return self.tray is not None and bool(getattr(self.tray, "_added", False))
+
+    def _hide_to_tray(self):
+        if self.tray is None:
+            # Explorer may not have been ready when the app started.
+            self._ensure_tray_icon()
+        if not self._tray_ready():
+            return False
+        try:
+            self.withdraw()
+            return True
+        except tk.TclError:
+            return False
+
+    def _on_unmap(self, event=None):
+        """The minimize (_) button hides the app next to the clock."""
+        if event is not None and event.widget is not self:
+            return
+        if not self.settings.get("minimize_to_tray", True):
+            return
+        try:
+            if self.state() == "iconic":
+                # Defer the withdrawal: doing it inside the Unmap event
+                # itself can fight the window manager's state change.
+                self.after(0, self._hide_to_tray)
+        except tk.TclError:
+            pass
+
     def _restore(self):
         self.state("normal")
         self.deiconify()
@@ -886,10 +974,10 @@ class ZadachiApp(tk.Tk):
             menu.grab_release()
 
     def _on_close(self):
-        if self.settings.get("minimize_to_tray", True) and self.tray is not None:
-            self.withdraw()
-        else:
-            self._quit()
+        if (self.settings.get("minimize_to_tray", True)
+                and self._hide_to_tray()):
+            return
+        self._quit()
 
     def _quit(self):
         try:
@@ -927,13 +1015,7 @@ def run_call_request(number: str) -> bool:
     root.title("Zadachi — звонок")
     root.geometry("380x140")
     root.attributes("-topmost", True)
-    if sys.platform == "win32":
-        icon = find_icon_path()
-        if icon:
-            try:
-                root.iconbitmap(default=icon)
-            except tk.TclError:
-                pass
+    apply_window_icon(root)
     status = tk.StringVar(value=f"Отправляю {number} на телефон…")
     ttk.Label(root, textvariable=status, wraplength=340,
               font=("Segoe UI", 11)).pack(padx=14, pady=(16, 8))

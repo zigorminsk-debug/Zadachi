@@ -38,7 +38,7 @@ def rounded_mask(size, radius_ratio=0.22):
     return m
 
 
-def base_icon():
+def base_icon(draw=True):
     """Full-bleed legacy icon on a 1024 canvas."""
     img = Image.new("RGBA", (S, S), (0, 0, 0, 0))
     # vertical gradient clipped to rounded square
@@ -49,8 +49,50 @@ def base_icon():
         gd.line([(0, y), (S, y)], fill=tuple(
             int(TOP[i] + (BOTTOM[i] - TOP[i]) * t) for i in range(3)) + (255,))
     img.paste(grad, (0, 0), rounded_mask(S))
-    draw_art(img, scale=1.0)
+    if draw:
+        draw_art(img, scale=1.0)
     return img
+
+
+def windows_small_icon():
+    """Simplified artwork for the 16-64 px frames inside the Windows ICO.
+
+    The detailed desk-phone drawing turns into noise at tray size, so
+    these frames contain only a bold handset and the orange task badge.
+    """
+    img = base_icon(draw=False)
+    layer = Image.new("RGBA", (S, S), (0, 0, 0, 0))
+    ld = ImageDraw.Draw(layer)
+    ld.arc([190, 160, 834, 650], start=200, end=340,
+           fill=(255, 255, 255, 255), width=145)
+    ld.rounded_rectangle([118, 392, 292, 665], radius=72,
+                         fill=(255, 255, 255, 255))
+    ld.rounded_rectangle([732, 392, 906, 665], radius=72,
+                         fill=(255, 255, 255, 255))
+    layer = layer.rotate(-18, resample=Image.BICUBIC, center=(512, 470))
+    img.alpha_composite(layer)
+
+    d = ImageDraw.Draw(img)
+    bx, by, r = 725, 725, 190
+    d.ellipse([bx - r - 16, by - r - 16, bx + r + 16, by + r + 16],
+              fill=(255, 255, 255, 255))
+    d.ellipse([bx - r, by - r, bx + r, by + r], fill=BADGE + (255,))
+    points = [(635, 725), (705, 795), (825, 655)]
+    d.line(points, fill=(255, 255, 255, 255), width=64, joint="curve")
+    for x, y in points:
+        d.ellipse([x - 32, y - 32, x + 32, y + 32],
+                  fill=(255, 255, 255, 255))
+    return img
+
+
+def save_windows_icon(legacy, path):
+    small = windows_small_icon()
+    frames = []
+    for size in (256, 128, 64, 48, 32, 24, 20, 16):
+        source = legacy if size >= 128 else small
+        frames.append(source.resize((size, size), Image.LANCZOS))
+    frames[0].save(path, format="ICO", append_images=frames[1:],
+                   sizes=[frame.size for frame in frames])
 
 
 def foreground_icon():
@@ -98,8 +140,7 @@ def main():
     round_icon.putalpha(circle)
 
     win_dir = os.path.join(ROOT, "windows")
-    legacy.save(os.path.join(win_dir, "icon.ico"),
-                sizes=[(s, s) for s in (16, 20, 24, 32, 48, 64, 128, 256)])
+    save_windows_icon(legacy, os.path.join(win_dir, "icon.ico"))
     print(" ", os.path.join(win_dir, "icon.ico"))
     save_png(legacy, os.path.join(win_dir, "icon.png"), 512)
 
