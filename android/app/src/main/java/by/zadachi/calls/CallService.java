@@ -1,5 +1,6 @@
 package by.zadachi.calls;
 
+import android.app.ActivityOptions;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
@@ -12,7 +13,10 @@ import android.content.IntentFilter;
 import android.content.pm.ServiceInfo;
 import android.net.Uri;
 import android.os.Build;
+import android.os.Bundle;
+import android.os.Handler;
 import android.os.IBinder;
+import android.os.Looper;
 import android.os.PowerManager;
 import android.telephony.PhoneStateListener;
 import android.telephony.TelephonyCallback;
@@ -22,6 +26,7 @@ import android.util.Log;
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
+import java.lang.reflect.Method;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
@@ -338,15 +343,17 @@ public class CallService extends Service {
     private static final String DIAL_CHANNEL = "zadachi_outgoing";
 
     /**
-     * Open the number in the phone's default dialer.
+     * Open the number in the phone's default dialer — directly, not as a
+     * notification.
      *
-     * A direct startActivity() from a service is silently blocked by
-     * Android's background-activity-launch rules on many builds (the PC
-     * saw "OK", the small window closed, and nothing happened). So we
-     * additionally post a high-priority notification whose full-screen /
-     * tap action opens the same trampoline. DialActivity cancels the
-     * notification when the direct launch works, so there is no double
-     * action.
+     * Android (and MIUI in particular) silently blocks most activity
+     * starts from background services. The reliable path is a
+     * PendingIntent sent with the Android 14 background-activity-start
+     * opt-in, which lands in DialActivity (a real foreground activity)
+     * that opens the dialer. The old notification is now only a delayed
+     * fallback: it is posted solely when DialActivity demonstrably did
+     * not run (e.g. MIUI's "pop-up windows in background" switch is
+     * off) — and then tapping it still opens the dialer.
      */
     private void openDialer(String number) {
         int notificationId = 2000 + (int) (System.currentTimeMillis() % 100000);
@@ -356,44 +363,101 @@ public class CallService extends Service {
         trampoline.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
                 | Intent.FLAG_ACTIVITY_CLEAR_TOP);
 
-        NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
-        if (nm != null) {
+        boolean sent = false;
+        if (Build.VERSION.SDK_INT >= 34) {
+            sent = sendWithBackgroundStartOptIn(trampoline, notificationId);
+        }
+        if (!sent) {
             try {
-                PendingIntent pi = PendingIntent.getActivity(
-                        this, notificationId, trampoline,
-                        PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
-                Notification.Builder builder;
-                if (Build.VERSION.SDK_INT >= 26) {
-                    NotificationChannel ch = new NotificationChannel(
-                            DIAL_CHANNEL, "Исходящие звонки с ПК",
-                            NotificationManager.IMPORTANCE_HIGH);
-                    ch.setDescription("Звонки, запущенные кликом на компьютере");
-                    nm.createNotificationChannel(ch);
-                    builder = new Notification.Builder(this, DIAL_CHANNEL);
-                } else {
-                    builder = new Notification.Builder(this)
-                            .setPriority(Notification.PRIORITY_HIGH);
-                }
-                Notification notification = builder
-                        .setContentTitle("Набрать номер с компьютера")
-                        .setContentText(number)
-                        .setSmallIcon(android.R.drawable.sym_call_outgoing)
-                        .setContentIntent(pi)
-                        .setFullScreenIntent(pi, true)
-                        .setAutoCancel(true)
-                        .build();
-                nm.notify(notificationId, notification);
+                startActivity(trampoline);
             } catch (RuntimeException e) {
-                Log.e("Zadachi", "Unable to post dial notification", e);
+                Log.e("Zadachi", "Direct dialer launch blocked", e);
             }
         }
 
-        // Fast path where the platform allows it (e.g. screen unlocked
-        // with our foreground service treated as visible).
+        // Delayed fallback: only if the trampoline never ran.
+        PendingIntent tapIntent = PendingIntent.getActivity(
+                this, notificationId, trampoline,
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+        new Handler(Looper.getMainLooper()).postDelayed(() -> {
+            if (!DialActivity.handledRecently(number)) {
+                postDialNotification(tapIntent, notificationId, number);
+            }
+        }, 900);
+    }
+
+    /**
+     * PendingIntent.send() with the Android 14 BAL opt-in
+     * (MODE_BACKGROUND_ACTIVITY_START_ALLOWED = 1) set for both the
+     * creator and the sender side, via reflection where needed.
+     */
+    private boolean sendWithBackgroundStartOptIn(Intent intent, int requestCode) {
         try {
-            startActivity(trampoline);
+            ActivityOptions createOpts = ActivityOptions.makeBasic();
+            setBackgroundStartMode(createOpts,
+                    "setPendingIntentCreatorBackgroundActivityStartMode");
+            setBackgroundStartMode(createOpts,
+                    "setPendingIntentBackgroundActivityStartMode");
+            PendingIntent pi = PendingIntent.getActivity(
+                    this, requestCode, intent,
+                    PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE,
+                    createOpts.toBundle());
+
+            ActivityOptions sendOpts = ActivityOptions.makeBasic();
+            setBackgroundStartMode(sendOpts,
+                    "setPendingIntentSenderBackgroundActivityStartMode");
+            setBackgroundStartMode(sendOpts,
+                    "setPendingIntentBackgroundActivityStartMode");
+            Bundle sendBundle = sendOpts.toBundle();
+            pi.send(this, 0, null, null, null, null, sendBundle);
+            return true;
+        } catch (Throwable e) {
+            Log.e("Zadachi", "BAL opt-in dialer launch failed", e);
+            return false;
+        }
+    }
+
+    private void setBackgroundStartMode(ActivityOptions options, String method) {
+        try {
+            Method m = options.getClass().getMethod(method, int.class);
+            m.invoke(options, 1); // MODE_BACKGROUND_ACTIVITY_START_ALLOWED
+        } catch (Exception ignored) {
+            // Method renamed/absent on this build; the other name may work.
+        }
+    }
+
+    private void postDialNotification(PendingIntent pi, int notificationId,
+                                      String number) {
+        NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+        if (nm == null) return;
+        try {
+            Notification.Builder builder;
+            if (Build.VERSION.SDK_INT >= 26) {
+                NotificationChannel ch = new NotificationChannel(
+                        DIAL_CHANNEL, "Исходящие звонки с ПК",
+                        NotificationManager.IMPORTANCE_HIGH);
+                ch.setDescription("Звонки, запущенные кликом на компьютере");
+                nm.createNotificationChannel(ch);
+                builder = new Notification.Builder(this, DIAL_CHANNEL);
+            } else {
+                builder = new Notification.Builder(this)
+                        .setPriority(Notification.PRIORITY_HIGH);
+            }
+            boolean miuiBlocked = MiuiUtils.isMiui()
+                    && !MiuiUtils.backgroundPopupAllowed(this);
+            Notification notification = builder
+                    .setContentTitle(miuiBlocked
+                            ? "Нажмите, чтобы открыть звонилку (MIUI блокирует автозапуск)"
+                            : "Нажмите, чтобы набрать номер")
+                    .setContentText(number)
+                    .setSmallIcon(android.R.drawable.sym_call_outgoing)
+                    .setContentIntent(pi)
+                    .setFullScreenIntent(pi, true)
+                    .setAutoCancel(true)
+                    .build();
+            nm.notify(notificationId, notification);
         } catch (RuntimeException e) {
-            Log.e("Zadachi", "Direct dialer launch blocked; notification remains", e);
+            Log.e("Zadachi", "Unable to post dial notification", e);
         }
     }
 }

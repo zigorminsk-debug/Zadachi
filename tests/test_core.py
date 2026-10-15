@@ -323,9 +323,11 @@ class CallerIdAndroidTest(unittest.TestCase):
 class DialerLaunchTest(unittest.TestCase):
     def test_pc_call_reaches_dialer_despite_background_limits(self):
         # Regression: a direct startActivity() from the service was
-        # silently blocked by Android, so the PC window closed and
-        # nothing happened on the phone. There must also be a
-        # full-screen/tappable notification path to the dialer.
+        # silently blocked by Android/MIUI, so the user only got a
+        # notification instead of the dialer. The dialer must be opened
+        # directly (PendingIntent with the background-start opt-in), and
+        # the notification may appear only as a delayed fallback when
+        # the trampoline demonstrably did not run.
         root = os.path.join(os.path.dirname(__file__), "..", "android",
                             "app", "src", "main")
         manifest = open(os.path.join(root, "AndroidManifest.xml"),
@@ -334,11 +336,18 @@ class DialerLaunchTest(unittest.TestCase):
                                   "CallService.java"), encoding="utf-8").read()
         dial = open(os.path.join(root, "java", "by", "zadachi", "calls",
                                  "DialActivity.java"), encoding="utf-8").read()
+        miui = open(os.path.join(root, "java", "by", "zadachi", "calls",
+                                 "MiuiUtils.java"), encoding="utf-8").read()
         self.assertIn(".DialActivity", manifest)
         self.assertIn("android.permission.USE_FULL_SCREEN_INTENT", manifest)
-        self.assertIn("setFullScreenIntent", calls)
-        self.assertIn("DialActivity.class", calls)
+        self.assertIn("sendWithBackgroundStartOptIn", calls)
+        self.assertIn("setPendingIntentCreatorBackgroundActivityStartMode", calls)
+        self.assertIn("handledRecently", calls)
+        self.assertIn("postDelayed", calls)
+        self.assertIn("setFullScreenIntent", calls)  # fallback only
         self.assertIn("Intent.ACTION_DIAL", dial)
+        self.assertIn("handledRecently", dial)
+        self.assertIn("backgroundPopupAllowed", miui)
 
 
 class AndroidManifestTest(unittest.TestCase):

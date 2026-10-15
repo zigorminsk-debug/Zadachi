@@ -57,8 +57,10 @@
             android:exported="false"
             android:launchMode="singleInstance"
             android:noHistory="true"
+            android:showWhenLocked="true"
             android:taskAffinity=""
-            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:turnScreenOn="true" />
 
         <!-- Reliable caller ID: with the system "Caller ID & spam" role,
              Telecom shows us the incoming number even when broadcasts

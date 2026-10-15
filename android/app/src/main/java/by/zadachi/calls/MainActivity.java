@@ -223,6 +223,17 @@ public class MainActivity extends Activity {
                 + "«АОН и спам» кнопкой выше — тогда Android будет показывать приложению "
                 + "настоящий номер звонящего. Звонки при этом не блокируются.", 13, false));
 
+        if (MiuiUtils.isMiui()) {
+            Button popup = new Button(this);
+            popup.setText("Разрешить открытие звонилки из фона (Xiaomi/MIUI)");
+            popup.setOnClickListener(v -> MiuiUtils.openBackgroundPopupSettings(this));
+            root.addView(popup);
+            root.addView(label("На Xiaomi без разрешения «Всплывающие окна в фоне» "
+                    + "(«Отображать всплывающие окна, когда приложение работает в фоне») "
+                    + "звонилка не сможет открываться сама — вместо неё будет уведомление. "
+                    + "Включите разрешение кнопкой выше.", 13, false));
+        }
+
         Button battery = new Button(this);
         battery.setText("Исключение из оптимизации батареи");
         battery.setOnClickListener(v -> {
@@ -299,6 +310,11 @@ public class MainActivity extends Activity {
                                 : "выключено — включите кнопкой ниже, иначе номер может быть скрыт")
                 + "\nИмя из контактов телефона: "
                         + (hasPermission(Manifest.permission.READ_CONTACTS) ? "доступно ✔" : "нет доступа")
+                + (!MiuiUtils.isMiui() ? ""
+                        : "\nОткрытие звонилки из фона (MIUI): "
+                                + (MiuiUtils.backgroundPopupAllowed(this)
+                                        ? "разрешено ✔"
+                                        : "ЗАПРЕЩЕНО — звонилка не откроется сама, включите кнопкой ниже"))
                 + "\nПК: " + (prefs.pcIp().isEmpty() ? "не найден" : prefs.pcIp())
                 + (prefs.lastEvent().isEmpty() ? ""
                         : "\nПоследний звонок: " + prefs.lastEvent())

@@ -21,6 +21,16 @@ public class DialActivity extends Activity {
     public static final String EXTRA_NUMBER = "number";
     public static final String EXTRA_NOTIFICATION_ID = "notificationId";
 
+    // Lets CallService know the trampoline really ran, so it does not
+    // post the fallback notification after a successful direct launch.
+    public static volatile String lastHandledNumber = "";
+    public static volatile long lastHandledAtMs = 0;
+
+    public static boolean handledRecently(String number) {
+        return number != null && number.equals(lastHandledNumber)
+                && System.currentTimeMillis() - lastHandledAtMs < 5000;
+    }
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -45,9 +55,12 @@ public class DialActivity extends Activity {
         }
         String number = intent.getStringExtra(EXTRA_NUMBER);
         if (number == null || number.trim().isEmpty()) return;
+        number = number.trim();
+        lastHandledNumber = number;
+        lastHandledAtMs = System.currentTimeMillis();
         try {
             Intent dial = new Intent(Intent.ACTION_DIAL,
-                    Uri.parse("tel:" + Uri.encode(number.trim())));
+                    Uri.parse("tel:" + Uri.encode(number)));
             dial.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             startActivity(dial); // default dialer; the user confirms the call
         } catch (ActivityNotFoundException e) {
