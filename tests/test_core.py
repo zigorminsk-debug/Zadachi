@@ -340,6 +340,11 @@ class DialerLaunchTest(unittest.TestCase):
                                  "MiuiUtils.java"), encoding="utf-8").read()
         self.assertIn(".DialActivity", manifest)
         self.assertIn("android.permission.USE_FULL_SCREEN_INTENT", manifest)
+        # The SAW permission is Android's background-activity-start
+        # exemption: without it the service cannot open the dialer
+        # directly and the user only gets the fallback notification.
+        self.assertIn("android.permission.SYSTEM_ALERT_WINDOW", manifest)
+        self.assertIn("BackgroundLaunch.canDrawOverlays", calls)
         self.assertIn("sendWithBackgroundStartOptIn", calls)
         self.assertIn("setPendingIntentCreatorBackgroundActivityStartMode", calls)
         self.assertIn("handledRecently", calls)

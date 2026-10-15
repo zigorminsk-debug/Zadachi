@@ -223,6 +223,14 @@ public class MainActivity extends Activity {
                 + "«АОН и спам» кнопкой выше — тогда Android будет показывать приложению "
                 + "настоящий номер звонящего. Звонки при этом не блокируются.", 13, false));
 
+        Button overlay = new Button(this);
+        overlay.setText("Разрешить открытие звонилки поверх других приложений");
+        overlay.setOnClickListener(v -> BackgroundLaunch.openOverlaySettings(this));
+        root.addView(overlay);
+        root.addView(label("Нужно, чтобы по клику на ПК штатная звонилка открывалась "
+                + "сама, а не уведомлением. Zadachi не рисует окна поверх приложений — "
+                + "Android просто требует это разрешение для запуска из фона.", 13, false));
+
         if (MiuiUtils.isMiui()) {
             Button popup = new Button(this);
             popup.setText("Разрешить открытие звонилки из фона (Xiaomi/MIUI)");
@@ -310,6 +318,10 @@ public class MainActivity extends Activity {
                                 : "выключено — включите кнопкой ниже, иначе номер может быть скрыт")
                 + "\nИмя из контактов телефона: "
                         + (hasPermission(Manifest.permission.READ_CONTACTS) ? "доступно ✔" : "нет доступа")
+                + "\nОткрытие звонилки поверх приложений: "
+                        + (BackgroundLaunch.canDrawOverlays(this)
+                                ? "разрешено ✔"
+                                : "НЕ разрешено — вместо звонилки будет уведомление, включите кнопкой ниже")
                 + (!MiuiUtils.isMiui() ? ""
                         : "\nОткрытие звонилки из фона (MIUI): "
                                 + (MiuiUtils.backgroundPopupAllowed(this)

@@ -347,27 +347,39 @@ public class CallService extends Service {
      * notification.
      *
      * Android (and MIUI in particular) silently blocks most activity
-     * starts from background services. The reliable path is a
-     * PendingIntent sent with the Android 14 background-activity-start
-     * opt-in, which lands in DialActivity (a real foreground activity)
-     * that opens the dialer. The old notification is now only a delayed
-     * fallback: it is posted solely when DialActivity demonstrably did
-     * not run (e.g. MIUI's "pop-up windows in background" switch is
-     * off) — and then tapping it still opens the dialer.
+     * starts from background services. With the "display over other
+     * apps" permission, Android explicitly allows this process to start
+     * activities from the background (AOSP BAL_ALLOW_SAW_PERMISSION),
+     * so DialActivity opens and launches the system dialer. Without it
+     * we try a PendingIntent with the Android 14 background-start
+     * opt-in. The old notification is only a delayed fallback: it is
+     * posted solely when DialActivity demonstrably did not run — and
+     * then tapping it still opens the dialer.
      */
     private void openDialer(String number) {
-        int notificationId = 2000 + (int) (System.currentTimeMillis() % 100000);
+        int notificationId = 2000
+                + (int) (System.currentTimeMillis() & 0x3fffffff);
         Intent trampoline = new Intent(this, DialActivity.class);
         trampoline.putExtra(DialActivity.EXTRA_NUMBER, number);
         trampoline.putExtra(DialActivity.EXTRA_NOTIFICATION_ID, notificationId);
         trampoline.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
                 | Intent.FLAG_ACTIVITY_CLEAR_TOP);
 
+        boolean directTried = false;
+        if (BackgroundLaunch.canDrawOverlays(this)) {
+            // The reliable path: our process holds the SAW exemption.
+            directTried = true;
+            try {
+                startActivity(trampoline);
+            } catch (RuntimeException e) {
+                Log.e("Zadachi", "Dialer launch with overlay exemption failed", e);
+            }
+        }
         boolean sent = false;
-        if (Build.VERSION.SDK_INT >= 34) {
+        if (!directTried && Build.VERSION.SDK_INT >= 34) {
             sent = sendWithBackgroundStartOptIn(trampoline, notificationId);
         }
-        if (!sent) {
+        if (!directTried && !sent) {
             try {
                 startActivity(trampoline);
             } catch (RuntimeException e) {
@@ -400,7 +412,7 @@ public class CallService extends Service {
                     "setPendingIntentBackgroundActivityStartMode");
             PendingIntent pi = PendingIntent.getActivity(
                     this, requestCode, intent,
-                    PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE,
+                    PendingIntent.FLAG_CANCEL_CURRENT | PendingIntent.FLAG_IMMUTABLE,
                     createOpts.toBundle());
 
             ActivityOptions sendOpts = ActivityOptions.makeBasic();

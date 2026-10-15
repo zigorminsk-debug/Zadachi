@@ -29,6 +29,10 @@
     <!-- Lets a PC-initiated call pop the dialer over other apps; where the
          system denies full-screen, the same action stays as a notification. -->
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+    <!-- Exemption that lets our background service start the dialer
+         activity directly (AOSP BAL_ALLOW_SAW_PERMISSION). The app never
+         draws overlay windows; the user grants this in system settings. -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
