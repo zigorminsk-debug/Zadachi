@@ -77,10 +77,16 @@ public class CallService extends Service {
         running = true;
         serviceRunning = true;
         io.execute(this::serverLoop);
+        // An allowed network has (re)appeared: deliver any calls the
+        // user approved with "Напомнить" while outside the network.
+        OfflineReminderDelivery.flushAsync(getApplicationContext());
     }
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
+        // WifiGate re-starts an already running service when a network
+        // returns or its periodic job runs; that is a delivery retry.
+        OfflineReminderDelivery.flushAsync(getApplicationContext());
         return START_STICKY;
     }
 

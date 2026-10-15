@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     phone TEXT DEFAULT '',
     name TEXT DEFAULT '',
     remind_at INTEGER DEFAULT 0,          -- unix ts, 0 = no reminder
+    repeat_mins INTEGER DEFAULT 0,        -- >0: reminder repeats every N minutes
     done INTEGER DEFAULT 0,
     created_at INTEGER NOT NULL,
     call_id INTEGER DEFAULT 0
@@ -113,7 +114,12 @@ def _merge_legacy_if_empty(portable_path: str, legacy_path: str):
                         pass
                 if legacy_total:
                     conn.execute("INSERT INTO calls SELECT * FROM legacy.calls")
-                    conn.execute("INSERT INTO tasks SELECT * FROM legacy.tasks")
+                    # Name the columns explicitly: newer databases have
+                    # extra task fields (repeat_mins) that legacy DBs lack.
+                    conn.execute(
+                        """INSERT INTO tasks(id,title,phone,name,remind_at,done,created_at,call_id)
+                           SELECT id,title,phone,name,remind_at,done,created_at,call_id
+                           FROM legacy.tasks""")
                     conn.execute(
                         "INSERT OR IGNORE INTO contacts SELECT * FROM legacy.contacts")
                     conn.commit()
@@ -161,7 +167,16 @@ class Database:
         self._conn.row_factory = sqlite3.Row
         with self._lock:
             self._conn.executescript(SCHEMA)
+            self._migrate()
             self._conn.commit()
+
+    def _migrate(self):
+        """Add columns introduced after a database was first created."""
+        task_columns = {row[1] for row in self._conn.execute(
+            "PRAGMA table_info(tasks)")}
+        if "repeat_mins" not in task_columns:
+            self._conn.execute(
+                "ALTER TABLE tasks ADD COLUMN repeat_mins INTEGER DEFAULT 0")
 
     def close(self):
         with self._lock:
@@ -187,12 +202,15 @@ class Database:
                 "SELECT * FROM calls ORDER BY id DESC LIMIT ?", (limit,))]
 
     # ---------- tasks ----------
-    def add_task(self, title, phone="", name="", remind_at=0, call_id=0):
+    def add_task(self, title, phone="", name="", remind_at=0, call_id=0,
+                 repeat_mins=0):
         now = int(time.time())
         with self._lock:
             cur = self._conn.execute(
-                "INSERT INTO tasks(title,phone,name,remind_at,done,created_at,call_id) VALUES(?,?,?,?,0,?,?)",
-                (title, phone, name, int(remind_at or 0), now, int(call_id or 0)),
+                """INSERT INTO tasks(title,phone,name,remind_at,repeat_mins,done,created_at,call_id)
+                   VALUES(?,?,?,?,?,0,?,?)""",
+                (title, phone, name, int(remind_at or 0),
+                 int(repeat_mins or 0), now, int(call_id or 0)),
             )
             self._conn.commit()
             task_id = cur.lastrowid
@@ -215,18 +233,23 @@ class Database:
             return dict(row) if row else None
 
     def update_task(self, task_id, title, phone="", name="", remind_at=0,
-                    done=None):
-        """Edit an existing task (used by the double-click edit dialog)."""
+                    done=None, repeat_mins=None):
+        """Edit an existing task (used by the double-click edit dialog).
+
+        repeat_mins=None preserves the task's existing repeat interval.
+        """
+        assignments = ["title=?", "phone=?", "name=?", "remind_at=?"]
+        params = [title, phone, name, int(remind_at or 0)]
+        if repeat_mins is not None:
+            assignments.append("repeat_mins=?")
+            params.append(int(repeat_mins or 0))
+        if done is not None:
+            assignments.append("done=?")
+            params.append(1 if done else 0)
+        params.append(task_id)
         with self._lock:
-            if done is None:
-                self._conn.execute(
-                    "UPDATE tasks SET title=?, phone=?, name=?, remind_at=? WHERE id=?",
-                    (title, phone, name, int(remind_at or 0), task_id))
-            else:
-                self._conn.execute(
-                    "UPDATE tasks SET title=?, phone=?, name=?, remind_at=?, done=? WHERE id=?",
-                    (title, phone, name, int(remind_at or 0),
-                     1 if done else 0, task_id))
+            self._conn.execute(
+                f"UPDATE tasks SET {', '.join(assignments)} WHERE id=?", params)
             self._conn.commit()
         if name and phone:
             self.learn_contact(phone, name)
@@ -289,6 +312,55 @@ class Database:
             self._conn.commit()
         if phone and name and phone != "unknown":
             self.learn_contact(phone, name)
+
+    def find_call_by_note(self, note):
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM calls WHERE note=? ORDER BY id DESC LIMIT 1",
+                (note,)).fetchone()
+            return dict(row) if row else None
+
+    def create_offline_reminder(self, phone, name, offline_id, remind_at,
+                                repeat_mins=15, device="", call_timestamp=0):
+        """Create the call + repeating task for an approved offline call.
+
+        Delivery from Android may be retried after a lost HTTP response;
+        offline_id makes creation idempotent, so no duplicate task can
+        appear. Returns (call_id, task_id, created).
+        """
+        note = f"offline:{offline_id}"
+        existing = self.find_call_by_note(note)
+        if existing:
+            with self._lock:
+                row = self._conn.execute(
+                    "SELECT id FROM tasks WHERE call_id=? ORDER BY id LIMIT 1",
+                    (existing["id"],)).fetchone()
+            return existing["id"], (row[0] if row else 0), False
+
+        now = int(time.time())
+        call_at = int((call_timestamp or 0) / 1000) \
+            if call_timestamp and call_timestamp > 10_000_000_000 else int(call_timestamp or now)
+        if call_at <= 0 or call_at > now + 86400:
+            call_at = now
+        title_who = name or phone or "номер скрыт"
+        title = f"Перезвонить — {title_who}"
+        with self._lock:
+            cur = self._conn.execute(
+                "INSERT INTO calls(phone,name,status,note,device,created_at) VALUES(?,?,?,?,?,?)",
+                (phone or "unknown", name, "offline", note, device, call_at),
+            )
+            call_id = cur.lastrowid
+            cur = self._conn.execute(
+                """INSERT INTO tasks(title,phone,name,remind_at,repeat_mins,done,created_at,call_id)
+                   VALUES(?,?,?,?,?,0,?,?)""",
+                (title, phone, name, int(remind_at or 0),
+                 int(repeat_mins or 0), now, call_id),
+            )
+            task_id = cur.lastrowid
+            self._conn.commit()
+        if name and phone:
+            self.learn_contact(phone, name)
+        return call_id, task_id, True
 
     @staticmethod
     def _same_number(stored, query) -> bool:

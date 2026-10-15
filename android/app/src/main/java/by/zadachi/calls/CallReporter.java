@@ -28,6 +28,58 @@ final class CallReporter {
                 + ",\"device\":\"" + Net.jsonEscape(Net.deviceName()) + "\""
                 + ",\"ts\":" + System.currentTimeMillis() + "}";
 
+        boolean sent = postToPc(prefs, json);
+        if (sent && ("incoming".equals(event) || "missed".equals(event)
+                || "ended".equals(event))) {
+            for (Long cancelledId : OfflineReminders.suppressDelivered(app, num)) {
+                OfflineReminderNotifier.cancel(app, cancelledId);
+            }
+        }
+
+        String when = new java.text.SimpleDateFormat(
+                "dd.MM HH:mm:ss", java.util.Locale.getDefault())
+                .format(new java.util.Date());
+        prefs.setLastEvent(when + " • " + event + " "
+                + (num.isEmpty() ? "(номер скрыт)" : num)
+                + (name.isEmpty() ? "" : " • " + name)
+                + (sent ? " • отправлено на ПК ✔" : " • не отправлено на ПК ✘"));
+        return sent;
+    }
+
+    /**
+     * Delivers a user-approved call that happened outside the allowed
+     * Wi-Fi. The PC turns this event into a task whose first reminder is
+     * due in five minutes and then repeats every 15 minutes.
+     */
+    static boolean sendOfflineReminder(Context context, OfflineReminders.Item item) {
+        if (item == null) return false;
+        Context app = context.getApplicationContext();
+        Prefs prefs = new Prefs(app);
+        String num = item.number == null ? "" : item.number.trim();
+        String name = item.name == null ? "" : item.name.trim();
+        if (name.isEmpty()) name = contactName(app, num);
+        String json = "{\"event\":\"offline_reminder\""
+                + ",\"offline_id\":\"" + item.id + "\""
+                + ",\"number\":\"" + Net.jsonEscape(num) + "\""
+                + ",\"name\":\"" + Net.jsonEscape(name) + "\""
+                + ",\"call_ts\":" + item.callTimestamp
+                + ",\"remind_after_sec\":300"
+                + ",\"repeat_mins\":15"
+                + ",\"device\":\"" + Net.jsonEscape(Net.deviceName()) + "\""
+                + ",\"ts\":" + System.currentTimeMillis() + "}";
+        boolean sent = postToPc(prefs, json);
+        String when = new java.text.SimpleDateFormat(
+                "dd.MM HH:mm:ss", java.util.Locale.getDefault())
+                .format(new java.util.Date());
+        prefs.setLastEvent(when + " • звонок вне сети "
+                + (num.isEmpty() ? "(номер скрыт)" : num)
+                + (name.isEmpty() ? "" : " • " + name)
+                + (sent ? " • напоминание создано на ПК ✔"
+                        : " • ПК пока недоступен, ждёт сеть ✘"));
+        return sent;
+    }
+
+    private static boolean postToPc(Prefs prefs, String json) {
         boolean sent = false;
         String ip = prefs.pcIp();
         if (!ip.isEmpty()) {
@@ -43,14 +95,6 @@ final class CallReporter {
                 sent = tryPost(pc.ip, pc.port, json, prefs.token());
             }
         }
-
-        String when = new java.text.SimpleDateFormat(
-                "dd.MM HH:mm:ss", java.util.Locale.getDefault())
-                .format(new java.util.Date());
-        prefs.setLastEvent(when + " • " + event + " "
-                + (num.isEmpty() ? "(номер скрыт)" : num)
-                + (name.isEmpty() ? "" : " • " + name)
-                + (sent ? " • отправлено на ПК ✔" : " • не отправлено на ПК ✘"));
         return sent;
     }
 

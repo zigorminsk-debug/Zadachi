@@ -97,6 +97,50 @@ class DatabaseTest(unittest.TestCase):
         self.assertEqual(task["remind_at"], 1234567890)
         self.assertEqual(self.db.name_for_phone("+375294445566"), "Пётр")
 
+    def test_offline_reminder_is_idempotent_and_repeats(self):
+        remind_at = int(time.time()) + 300
+        first = self.db.create_offline_reminder(
+            "+375291112233", "Иван", "call-42", remind_at,
+            repeat_mins=15, call_timestamp=1700000000000)
+        second = self.db.create_offline_reminder(
+            "+375291112233", "Иван", "call-42", remind_at,
+            repeat_mins=15, call_timestamp=1700000000000)
+        self.assertTrue(first[2])
+        self.assertFalse(second[2])
+        self.assertEqual(first[:2], second[:2])
+        task = self.db.get_task(first[1])
+        self.assertEqual(task["phone"], "+375291112233")
+        self.assertEqual(task["name"], "Иван")
+        self.assertEqual(task["repeat_mins"], 15)
+        self.assertEqual(len(self.db.list_tasks()), 1)
+        self.assertEqual(len(self.db.list_calls()), 1)
+
+    def test_repeat_interval_survives_task_edit(self):
+        tid = self.db.add_task("Циклическая", repeat_mins=15)
+        self.db.update_task(tid, "Циклическая новая")
+        self.assertEqual(self.db.get_task(tid)["repeat_mins"], 15)
+
+    def test_old_database_gets_repeat_column(self):
+        import sqlite3
+        path = self.tmp.name + ".old"
+        conn = sqlite3.connect(path)
+        conn.execute("""CREATE TABLE tasks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL,
+            phone TEXT DEFAULT '', name TEXT DEFAULT '',
+            remind_at INTEGER DEFAULT 0, done INTEGER DEFAULT 0,
+            created_at INTEGER NOT NULL, call_id INTEGER DEFAULT 0)""")
+        conn.execute(
+            "INSERT INTO tasks(title,created_at) VALUES('Старая задача',1)")
+        conn.commit()
+        conn.close()
+        try:
+            old = Database(path)
+            task = old.list_tasks()[0]
+            self.assertEqual(task["repeat_mins"], 0)
+            old.close()
+        finally:
+            os.unlink(path)
+
 
 class TaskInteractionTest(unittest.TestCase):
     def test_double_click_edits_instead_of_completing(self):
@@ -379,6 +423,52 @@ class AndroidManifestTest(unittest.TestCase):
         self.assertIn("android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE", manifest)
         self.assertIn("android.permission.CHANGE_NETWORK_STATE", manifest)
         self.assertIn('android:foregroundServiceType="connectedDevice"', manifest)
+
+
+class OfflineReminderTest(unittest.TestCase):
+    def test_offline_call_flow_phone_to_pc(self):
+        root = os.path.join(os.path.dirname(__file__), "..")
+        android = os.path.join(root, "android", "app", "src", "main")
+        manifest = open(os.path.join(android, "AndroidManifest.xml"),
+                        encoding="utf-8").read()
+        base = os.path.join(android, "java", "by", "zadachi", "calls")
+
+        def java(name):
+            return open(os.path.join(base, name), encoding="utf-8").read()
+
+        screening = java("ZadachiCallScreeningService.java")
+        receiver = java("OfflineCallReceiver.java")
+        notifier = java("OfflineReminderNotifier.java")
+        actions = java("OfflineReminderActionReceiver.java")
+        delivery = java("OfflineReminderDelivery.java")
+        reporter = java("CallReporter.java")
+        service = java("CallService.java")
+        app = open(os.path.join(root, "windows", "zadachi", "app.py"),
+                   encoding="utf-8").read()
+
+        # Outside allowed Wi-Fi the call is remembered, and at IDLE the
+        # user is offered Remind / Dismiss instead of losing the call.
+        self.assertIn(".OfflineCallReceiver", manifest)
+        self.assertIn("android.intent.action.PHONE_STATE", manifest)
+        self.assertIn("OfflineReminders.rememberActive", screening)
+        self.assertIn("EXTRA_STATE_IDLE", receiver)
+        self.assertIn("OfflineReminderNotifier.show", receiver)
+        self.assertIn('"Напомнить"', notifier)
+        self.assertIn('"Отклонить"', notifier)
+        self.assertIn("ACTION_REMIND", actions)
+        self.assertIn("ACTION_DISMISS", actions)
+
+        # Remind queues the item; an allowed network delivers it to the
+        # PC, which creates a +5 minute task repeating every 15 minutes.
+        self.assertIn("markQueued", actions)
+        self.assertIn("OfflineReminderDelivery.flushAsync", service)
+        self.assertIn('\\"event\\":\\"offline_reminder\\"', reporter)
+        self.assertIn('\\"remind_after_sec\\":300', reporter)
+        self.assertIn('\\"repeat_mins\\":15', reporter)
+        self.assertIn('status == "offline_reminder"', app)
+        self.assertIn("create_offline_reminder", app)
+        self.assertIn("Повтор каждые", app)
+        self.assertIn("close_reminder", app)
 
 
 class StartupTest(unittest.TestCase):

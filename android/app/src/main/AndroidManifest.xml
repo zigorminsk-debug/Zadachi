@@ -108,5 +108,27 @@
                 <action android:name="android.net.wifi.supplicant.CONNECTION_CHANGE" />
             </intent-filter>
         </receiver>
+
+        <!-- Calls outside allowed Wi-Fi: CallService is stopped then.
+             ACTION_PHONE_STATE_CHANGED is exempt from Android's implicit
+             broadcast limits, so this receiver wakes only for calls and
+             can offer a reminder after the call ends. -->
+        <receiver
+            android:name=".OfflineCallReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.PHONE_STATE" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Buttons in the offline-call notification. -->
+        <receiver
+            android:name=".OfflineReminderActionReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="by.zadachi.calls.action.OFFLINE_REMIND" />
+                <action android:name="by.zadachi.calls.action.OFFLINE_DISMISS" />
+            </intent-filter>
+        </receiver>
     </application>
 </manifest>

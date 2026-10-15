@@ -55,6 +55,7 @@ public class MainActivity extends Activity {
         super.onResume();
         rebuildSsidList();
         WifiGate.evaluate(this);
+        OfflineReminderDelivery.flushAsync(this);
         refreshStatus();
         if (statusView != null) {
             statusView.postDelayed(this::refreshStatus, 700);
@@ -222,6 +223,10 @@ public class MainActivity extends Activity {
         root.addView(label("Если номер входящего не определяется: включите Zadachi как "
                 + "«АОН и спам» кнопкой выше — тогда Android будет показывать приложению "
                 + "настоящий номер звонящего. Звонки при этом не блокируются.", 13, false));
+        root.addView(label("Если входящий звонок был вне разрешённой Wi-Fi, после него "
+                + "появится уведомление «Напомнить / Отклонить». «Напомнить» поставит звонок "
+                + "в очередь: при появлении сети задача сама создастся на ПК, напомнит "
+                + "через 5 минут и далее каждые 15 минут до её завершения.", 13, false));
 
         Button overlay = new Button(this);
         overlay.setText("Разрешить открытие звонилки поверх других приложений");
@@ -330,6 +335,8 @@ public class MainActivity extends Activity {
                 + "\nПК: " + (prefs.pcIp().isEmpty() ? "не найден" : prefs.pcIp())
                 + (prefs.lastEvent().isEmpty() ? ""
                         : "\nПоследний звонок: " + prefs.lastEvent())
+                + (OfflineReminders.summary(this).isEmpty() ? ""
+                        : "\n" + OfflineReminders.summary(this))
                 + "\nОптимизация батареи: " + (noOpt ? "отключена ✔" : "включена (рекомендуется отключить)"));
     }
 

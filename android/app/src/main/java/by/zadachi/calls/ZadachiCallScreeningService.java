@@ -48,6 +48,9 @@ public class ZadachiCallScreeningService
                 .setSkipNotification(false)
                 .build());
         try {
+            if (callDetails.getCallDirection() != Call.Details.DIRECTION_INCOMING) {
+                return; // outgoing calls are never mirrored as incoming
+            }
             Uri handle = callDetails.getHandle();
             if (handle == null || !"tel".equals(handle.getScheme())) return;
             String number = handle.getSchemeSpecificPart();
@@ -55,7 +58,23 @@ public class ZadachiCallScreeningService
 
             Prefs prefs = new Prefs(getApplicationContext());
             String ssid = Net.currentSsid(getApplicationContext());
-            if (!prefs.isActiveHere(ssid)) return; // not on an allowed Wi-Fi
+            if (!prefs.isActiveHere(ssid)) {
+                // Outside the allowed networks there is no PC to report
+                // to yet. Remember the call; OfflineCallReceiver asks
+                // the user at the end whether to queue a reminder.
+                if (prefs.enabled()) {
+                    String name = "";
+                    if (android.os.Build.VERSION.SDK_INT >= 30) {
+                        String displayName = callDetails.getContactDisplayName();
+                        if (displayName != null) name = displayName.trim();
+                    }
+                    OfflineReminders.rememberActive(
+                            getApplicationContext(), Uri.decode(number.trim()),
+                            name, callDetails.getCreationTimeMillis());
+                }
+                return;
+            }
+            OfflineReminders.clearActive(getApplicationContext());
 
             final String num = number.trim();
             io.execute(() -> {

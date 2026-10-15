@@ -397,8 +397,11 @@ class ZadachiApp(tk.Tk):
         include_done = bool(getattr(self, "show_done_var", None) and
                             self.show_done_var.get())
         for t in self.db.list_tasks(include_done=include_done):
+            when = fmt_ts(t["remind_at"]) if t["remind_at"] else "без срока"
+            if int(t.get("repeat_mins") or 0) > 0 and not t["done"]:
+                when += f" ↻{int(t['repeat_mins'])} мин"
             self.tasks_tree.insert("", "end", iid=str(t["id"]), values=(
-                fmt_ts(t["remind_at"]) if t["remind_at"] else "без срока",
+                when,
                 ("✔ " if t["done"] else "") + t["title"], t["phone"], t["name"]))
 
     def refresh_calls(self):
@@ -406,8 +409,11 @@ class ZadachiApp(tk.Tk):
             return
         self.calls_tree.delete(*self.calls_tree.get_children())
         for c in self.db.list_calls(300):
+            status = "вне сети" if c["status"] == "offline" else c["status"]
+            note = ("Напоминание по звонку вне сети"
+                    if str(c["note"] or "").startswith("offline:") else c["note"])
             self.calls_tree.insert("", "end", iid=str(c["id"]), values=(
-                fmt_ts(c["created_at"]), c["phone"], c["name"], c["status"], c["note"]))
+                fmt_ts(c["created_at"]), c["phone"], c["name"], status, note))
 
     # ------------------------------------------------------ tasks actions
     def _selected(self, tree):
@@ -563,6 +569,40 @@ class ZadachiApp(tk.Tk):
             # Name priority: phone's own address book (sent by Android),
             # then our accumulated contacts/history (format-tolerant).
             name = supplied_name or (self.db.name_for_phone(phone) if phone else "")
+            if status == "offline_reminder":
+                # A call received outside the phone's allowed Wi-Fi was
+                # approved by the user ("Напомнить") and delivered when
+                # a network returned. Create its task automatically:
+                # first reminder in 5 minutes, then every 15 minutes
+                # until the task is completed on this PC.
+                try:
+                    remind_after = int(p.get("remind_after_sec") or 300)
+                except (TypeError, ValueError):
+                    remind_after = 300
+                try:
+                    repeat_mins = int(p.get("repeat_mins") or 15)
+                except (TypeError, ValueError):
+                    repeat_mins = 15
+                remind_after = min(max(remind_after, 0), 86400)
+                repeat_mins = min(max(repeat_mins, 1), 1440)
+                offline_id = str(p.get("offline_id") or
+                                 f"{p.get('call_ts') or p.get('ts') or time.time()}:{phone}")
+                call_id, task_id, created = self.db.create_offline_reminder(
+                    phone, name, offline_id,
+                    remind_at=int(time.time()) + remind_after,
+                    repeat_mins=repeat_mins,
+                    device=str(p.get("device", "")),
+                    call_timestamp=p.get("call_ts") or p.get("ts") or 0)
+                self.refresh_calls()
+                self.refresh_tasks()
+                if created:
+                    self._set_status(
+                        "Звонок вне сети доставлен с телефона: задача "
+                        f"№{task_id} создана, напоминание через 5 минут "
+                        "и далее каждые 15 минут")
+                else:
+                    self._set_status("Звонок вне сети уже был доставлен с телефона")
+                return
             is_incoming = status in ("incoming", "ringing", "call")
             now = time.time()
             same_call = (
@@ -785,12 +825,35 @@ class ZadachiApp(tk.Tk):
         win.title("Напоминание")
         win.attributes("-topmost", True)
         win.geometry("440x280")
+
+        def close_reminder():
+            # Closing the window is not completion. A repeating task is
+            # automatically shown again after its interval (15 minutes
+            # for calls approved on the phone outside the network).
+            now_ts = int(time.time())
+            for item in tasks:
+                tid = item["id"]
+                self._notified.discard(tid)
+                current = self.db.get_task(tid)
+                if (current and not current["done"]
+                        and int(current.get("repeat_mins") or 0) > 0
+                        and current["remind_at"]
+                        and current["remind_at"] <= now_ts):
+                    self.db.snooze_task(
+                        tid, int(current["repeat_mins"]) * 60)
+            self.refresh_tasks()
+            win.destroy()
+
+        win.protocol("WM_DELETE_WINDOW", close_reminder)
         ttk.Label(win, text="⏰ Напоминание", font=("Segoe UI", 13, "bold")).pack(pady=(10, 4))
         for t in tasks:
             self._notified.add(t["id"])
             row = ttk.Frame(win, padding=6)
             row.pack(fill="x")
-            text = t["title"] + (f"\n{t['name']} {t['phone']}".strip() if (t["name"] or t["phone"]) else "")
+            repeat_mins = int(t.get("repeat_mins") or 0)
+            repeat_text = (f"\nПовтор каждые {repeat_mins} мин до завершения"
+                           if repeat_mins else "")
+            text = t["title"] + (f"\n{t['name']} {t['phone']}".strip() if (t["name"] or t["phone"]) else "") + repeat_text
             ttk.Label(row, text=text, wraplength=240).pack(side="left")
 
             def done(tid=t["id"], w=win):
@@ -800,15 +863,16 @@ class ZadachiApp(tk.Tk):
                 if not [x for x in tasks if x["id"] in self._notified]:
                     w.destroy()
 
-            def snooze(tid=t["id"], w=win):
-                self.db.snooze_task(tid, 600)
+            def snooze(tid=t["id"], w=win, repeat=repeat_mins):
+                self.db.snooze_task(tid, repeat * 60 if repeat else 600)
                 self._notified.discard(tid)
                 self.refresh_tasks()
                 if not [x for x in tasks if x["id"] in self._notified]:
                     w.destroy()
 
             ttk.Button(row, text="✔ Готово", command=done).pack(side="right")
-            ttk.Button(row, text="+10 мин", command=snooze).pack(side="right", padx=4)
+            ttk.Button(row, text=f"+{repeat_mins} мин" if repeat_mins else "+10 мин",
+                       command=snooze).pack(side="right", padx=4)
             if t["phone"]:
                 ttk.Button(row, text="📞", command=lambda p=t["phone"]: self.call_phone(p)).pack(side="right")
 
