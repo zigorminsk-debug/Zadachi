@@ -14,9 +14,12 @@ Features
 """
 from __future__ import annotations
 
+import os
 import queue
+import sys
 import threading
 import time
+import traceback
 import tkinter as tk
 from tkinter import messagebox, ttk
 
@@ -114,8 +117,21 @@ class AutocompleteEntry(ttk.Entry):
         self.icursor("end")
 
 
+def log_error(context: str):
+    """Append the current exception to %APPDATA%/Zadachi/error.log."""
+    try:
+        base = os.environ.get("APPDATA") or os.path.expanduser("~")
+        folder = os.path.join(base, "Zadachi")
+        os.makedirs(folder, exist_ok=True)
+        with open(os.path.join(folder, "error.log"), "a", encoding="utf-8") as f:
+            f.write(f"\n--- {time.strftime('%Y-%m-%d %H:%M:%S')} {context} ---\n")
+            f.write(traceback.format_exc())
+    except Exception:
+        pass
+
+
 class ZadachiApp(tk.Tk):
-    def __init__(self):
+    def __init__(self, start_in_tray: bool = False):
         super().__init__()
         self.title("Zadachi — звонки и задачи")
         self.geometry("860x560")
@@ -142,8 +158,13 @@ class ZadachiApp(tk.Tk):
         except OSError as exc:
             self._set_status(f"Не удалось запустить сервер: {exc}")
 
+        # Tray is optional decoration: it must NEVER kill the app window.
         if self.settings.get("minimize_to_tray", True):
-            self.tray = TrayIcon(self, self._restore, self._tray_menu)
+            try:
+                self.tray = TrayIcon(self, self._restore, self._tray_menu)
+            except Exception:
+                self.tray = None
+                log_error("tray icon init failed (continuing without tray)")
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
         self.after(300, self._poll_events)
@@ -152,6 +173,15 @@ class ZadachiApp(tk.Tk):
         self.after(150, self._watch_hotkey)
         self.refresh_tasks()
         self.refresh_calls()
+
+        # A manual launch always shows the window; only the Windows
+        # autostart entry passes --tray and starts hidden in background.
+        if start_in_tray and self.tray is not None:
+            self.withdraw()
+        else:
+            self.state("normal")
+            self.deiconify()
+            self.lift()
 
     # ------------------------------------------------------------------ UI
     def _build_ui(self):
@@ -626,6 +656,7 @@ class ZadachiApp(tk.Tk):
 
     # ---------------------------------------------------------------- tray
     def _restore(self):
+        self.state("normal")
         self.deiconify()
         self.lift()
         self.focus_force()
@@ -658,8 +689,9 @@ class ZadachiApp(tk.Tk):
             self.destroy()
 
 
-def main():
-    app = ZadachiApp()
+def main(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    app = ZadachiApp(start_in_tray="--tray" in argv)
     app.mainloop()
 
 

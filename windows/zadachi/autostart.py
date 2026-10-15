@@ -12,12 +12,14 @@ VALUE_NAME = "Zadachi"
 
 
 def _launch_command() -> str:
+    # --tray: autostart launches into the background; a manual double-click
+    # (no argument) always opens the window.
     if getattr(sys, "frozen", False):  # PyInstaller .exe
-        return f'"{sys.executable}"'
+        return f'"{sys.executable}" --tray'
     # dev mode: pythonw Zadachi.py
     script = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "Zadachi.py")
     pyw = sys.executable.replace("python.exe", "pythonw.exe")
-    return f'"{pyw}" "{script}"'
+    return f'"{pyw}" "{script}" --tray'
 
 
 def is_autostart_enabled() -> bool:

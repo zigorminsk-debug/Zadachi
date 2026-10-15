@@ -43,6 +43,19 @@ jobs:
         run: |
           if (!(Test-Path dist\Zadachi.exe)) { throw "Zadachi.exe not built" }
           Get-Item dist\Zadachi.exe | Format-List Name,Length
+      - name: Smoke test (exe must stay alive, not collapse on start)
+        working-directory: windows
+        shell: powershell
+        run: |
+          $p = Start-Process -FilePath dist\Zadachi.exe -PassThru
+          Start-Sleep -Seconds 8
+          if ($p.HasExited) {
+            $log = "$env:APPDATA\Zadachi\error.log"
+            if (Test-Path $log) { Get-Content $log }
+            throw "Zadachi.exe exited immediately, exit code $($p.ExitCode)"
+          }
+          Write-Host "Zadachi.exe is alive after 8s - OK"
+          Stop-Process -Id $p.Id -Force
       - uses: actions/upload-artifact@v4
         with:
           name: Zadachi-Windows

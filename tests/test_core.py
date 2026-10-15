@@ -7,8 +7,9 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "windows"))
 
-from zadachi import protocol          # noqa: E402
-from zadachi.db import Database       # noqa: E402
+from zadachi import autostart, protocol          # noqa: E402
+from zadachi.db import Database                  # noqa: E402
+from zadachi.tray import TrayIcon                # noqa: E402
 
 
 class PhoneUtilsTest(unittest.TestCase):
@@ -55,6 +56,19 @@ class DatabaseTest(unittest.TestCase):
         self.assertEqual(self.db.due_tasks(), [])
         self.db.set_task_done(tid, True)
         self.assertEqual(self.db.list_tasks(), [])
+
+
+class StartupTest(unittest.TestCase):
+    def test_autostart_goes_to_tray_but_manual_launch_does_not(self):
+        # Autostart entry must start hidden; the exe itself without
+        # --tray always shows its window (regression: window used to
+        # collapse immediately on open).
+        self.assertIn("--tray", autostart._launch_command())
+
+    def test_tray_is_noop_off_windows(self):
+        tray = TrayIcon(object(), lambda: None)
+        self.assertFalse(tray._added)
+        tray.remove()  # must not raise
 
 
 if __name__ == "__main__":
