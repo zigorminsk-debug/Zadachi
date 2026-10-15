@@ -177,7 +177,7 @@ class Database:
             )
             self._conn.commit()
             call_id = cur.lastrowid
-        if name:
+        if name and phone and phone != "unknown":
             self.learn_contact(phone, name)
         return call_id
 
@@ -271,16 +271,60 @@ class Database:
             )
             self._conn.commit()
 
-    def name_for_phone(self, phone):
+    def update_call_phone_name(self, call_id, phone="", name=""):
+        """Fill in a call's number/name when a later event identifies it."""
         with self._lock:
-            row = self._conn.execute(
-                "SELECT name FROM contacts WHERE phone=?", (phone,)).fetchone()
-            if row:
-                return row["name"]
-            row = self._conn.execute(
-                "SELECT name FROM calls WHERE phone=? AND name<>'' ORDER BY id DESC LIMIT 1",
-                (phone,)).fetchone()
-            return row["name"] if row else ""
+            if phone and name:
+                self._conn.execute(
+                    "UPDATE calls SET phone=?, name=? WHERE id=?",
+                    (phone, name, call_id))
+            elif phone:
+                self._conn.execute(
+                    "UPDATE calls SET phone=? WHERE id=?", (phone, call_id))
+            elif name:
+                self._conn.execute(
+                    "UPDATE calls SET name=? WHERE id=?", (name, call_id))
+            else:
+                return
+            self._conn.commit()
+        if phone and name and phone != "unknown":
+            self.learn_contact(phone, name)
+
+    @staticmethod
+    def _same_number(stored, query) -> bool:
+        def digits(v):
+            d = "".join(ch for ch in str(v or "") if ch.isdigit())
+            # Canonicalise BY/RU trunk forms: 80XXXXXXXXX -> 375XXXXXXXXX,
+            # 8XXXXXXXXXX -> 7XXXXXXXXXX (same rule as protocol.normalize).
+            if len(d) == 11 and d.startswith("80"):
+                d = "375" + d[2:]
+            elif len(d) == 11 and d.startswith("8"):
+                d = "7" + d[1:]
+            return d
+
+        a, b = digits(stored), digits(query)
+        if not a or not b:
+            return False
+        if a == b:
+            return True
+        shorter, longer = (a, b) if len(a) < len(b) else (b, a)
+        return len(shorter) >= 9 and longer.endswith(shorter)
+
+    def name_for_phone(self, phone):
+        """Contact/history name for a number, tolerant of +375/80/9-digit
+        format differences (exact-match SQL missed those before)."""
+        if not phone:
+            return ""
+        with self._lock:
+            for row in self._conn.execute(
+                    "SELECT phone, name FROM contacts ORDER BY seen DESC, updated_at DESC"):
+                if self._same_number(row["phone"], phone):
+                    return row["name"]
+            for row in self._conn.execute(
+                    "SELECT phone, name FROM calls WHERE name<>'' ORDER BY id DESC"):
+                if self._same_number(row["phone"], phone):
+                    return row["name"]
+            return ""
 
     def suggest_titles(self, prefix="", limit=10):
         """Previously entered task titles matching prefix, most used first."""

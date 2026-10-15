@@ -2,6 +2,7 @@ package by.zadachi.calls;
 
 import android.Manifest;
 import android.app.Activity;
+import android.app.role.RoleManager;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.net.Uri;
@@ -43,7 +44,8 @@ public class MainActivity extends Activity {
         WifiGate.evaluate(this);
         // Without these permissions Android will not report real incoming
         // calls/numbers (a manual test call would still work). Ask once.
-        if (Build.VERSION.SDK_INT >= 23 && !hasCallPermissions()) {
+        if (Build.VERSION.SDK_INT >= 23
+                && (!hasCallPermissions() || !hasPermission(Manifest.permission.READ_CONTACTS))) {
             requestPermissions();
         }
     }
@@ -209,9 +211,17 @@ public class MainActivity extends Activity {
 
         root.addView(label("Разрешения и батарея", 16, true));
         Button perms = new Button(this);
-        perms.setText("Выдать разрешения (звонки, Wi-Fi, уведомления)");
+        perms.setText("Выдать разрешения (звонки, журнал, контакты, Wi-Fi)");
         perms.setOnClickListener(v -> requestPermissions());
         root.addView(perms);
+
+        Button callerId = new Button(this);
+        callerId.setText("Включить определение номера входящих");
+        callerId.setOnClickListener(v -> requestCallerIdRole());
+        root.addView(callerId);
+        root.addView(label("Если номер входящего не определяется: включите Zadachi как "
+                + "«АОН и спам» кнопкой выше — тогда Android будет показывать приложению "
+                + "настоящий номер звонящего. Звонки при этом не блокируются.", 13, false));
 
         Button battery = new Button(this);
         battery.setText("Исключение из оптимизации батареи");
@@ -284,6 +294,11 @@ public class MainActivity extends Activity {
                 + "\nСтатус: " + serviceState
                 + "\nДоступ к звонкам и номерам: "
                         + (hasCallPermissions() ? "есть ✔" : "НЕТ — приложение не увидит реальный входящий номер")
+                + "\nОпределение номера (АОН и спам): "
+                        + (hasCallerIdRole() ? "включено ✔"
+                                : "выключено — включите кнопкой ниже, иначе номер может быть скрыт")
+                + "\nИмя из контактов телефона: "
+                        + (hasPermission(Manifest.permission.READ_CONTACTS) ? "доступно ✔" : "нет доступа")
                 + "\nПК: " + (prefs.pcIp().isEmpty() ? "не найден" : prefs.pcIp())
                 + (prefs.lastEvent().isEmpty() ? ""
                         : "\nПоследний звонок: " + prefs.lastEvent())
@@ -302,11 +317,62 @@ public class MainActivity extends Activity {
                 && hasPermission(Manifest.permission.READ_CALL_LOG);
     }
 
+    /** The system "Caller ID & spam" role exposes the real incoming number. */
+    private boolean hasCallerIdRole() {
+        if (Build.VERSION.SDK_INT < 29) return false;
+        try {
+            RoleManager rm = (RoleManager) getSystemService(ROLE_SERVICE);
+            return rm != null && rm.isRoleAvailable(RoleManager.ROLE_CALL_SCREENING)
+                    && rm.isRoleHeld(RoleManager.ROLE_CALL_SCREENING);
+        } catch (RuntimeException e) {
+            return false;
+        }
+    }
+
+    private void requestCallerIdRole() {
+        if (Build.VERSION.SDK_INT < 29) {
+            toast("На этой версии Android номер дают разрешения «Телефон» и «Журнал звонков».");
+            return;
+        }
+        if (hasCallerIdRole()) {
+            toast("Определение номера уже включено ✔");
+            return;
+        }
+        try {
+            RoleManager rm = (RoleManager) getSystemService(ROLE_SERVICE);
+            if (rm == null || !rm.isRoleAvailable(RoleManager.ROLE_CALL_SCREENING)) {
+                toast("Роль «АОН и спам» недоступна на этом устройстве. "
+                        + "Включите Zadachi вручную: Настройки → Приложения → "
+                        + "Приложения по умолчанию → АОН и спам.");
+                return;
+            }
+            Intent intent = rm.createRequestRoleIntent(RoleManager.ROLE_CALL_SCREENING);
+            startActivityForResult(intent, 102);
+        } catch (RuntimeException e) {
+            toast("Откройте вручную: Настройки → Приложения → Приложения по умолчанию "
+                    + "→ АОН и спам → Zadachi");
+        }
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == 102) {
+            toast(hasCallerIdRole()
+                    ? "Определение номера включено ✔"
+                    : "Роль не выдана: без неё номер входящего может не определяться");
+            refreshStatus();
+            WifiGate.evaluate(this);
+        }
+    }
+
     private void requestPermissions() {
         java.util.List<String> list = new java.util.ArrayList<>();
         list.add(Manifest.permission.READ_PHONE_STATE);
         // Since Android 9 the caller's number is hidden without this.
         list.add(Manifest.permission.READ_CALL_LOG);
+        // Caller name from the phone's address book.
+        list.add(Manifest.permission.READ_CONTACTS);
         list.add(Manifest.permission.ACCESS_FINE_LOCATION);
         if (Build.VERSION.SDK_INT >= 31) list.add(Manifest.permission.READ_PHONE_NUMBERS);
         if (Build.VERSION.SDK_INT >= 33) list.add(Manifest.permission.POST_NOTIFICATIONS);

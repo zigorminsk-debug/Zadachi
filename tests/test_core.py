@@ -108,6 +108,10 @@ class TaskInteractionTest(unittest.TestCase):
         self.assertIn('bind("<Double-1>", lambda e: self._task_edit_selected())', app)
         self.assertNotIn('bind("<Double-1>", lambda e: self._task_done())', app)
         self.assertIn("def _edit_task_dialog", app)
+        # The task-list Call button must never fail silently when the
+        # task has no phone number yet.
+        self.assertIn("У этой задачи не указан телефон", app)
+        self.assertIn("Позвонить по задаче", app)
 
 
 class PortableDatabaseTest(unittest.TestCase):
@@ -149,6 +153,29 @@ class PortableDatabaseTest(unittest.TestCase):
             titles = [t["title"] for t in current.list_tasks()]
             current.close()
             self.assertEqual(titles, ["Текущая"])
+
+
+class CallerIdTest(unittest.TestCase):
+    def test_phones_match_formats(self):
+        self.assertTrue(protocol.phones_match("+375291234567", "80291234567"))
+        self.assertTrue(protocol.phones_match("+375 (29) 123-45-67", "291234567"))
+        self.assertFalse(protocol.phones_match("+375291234567", "+375297654321"))
+        self.assertFalse(protocol.phones_match("", "+375291234567"))
+
+    def test_name_lookup_tolerates_number_format(self):
+        import tempfile, os
+        tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        tmp.close()
+        try:
+            db = Database(tmp.name)
+            db.add_call("80291112233", name="Иван")
+            self.assertEqual(db.name_for_phone("+375291112233"), "Иван")
+            self.assertEqual(db.name_for_phone("291112233"), "Иван")
+            db.update_call_phone_name(1, "+375299998877", "Пётр")
+            self.assertEqual(db.name_for_phone("80299998877"), "Пётр")
+            db.close()
+        finally:
+            os.unlink(tmp.name)
 
 
 class ServerTest(unittest.TestCase):
@@ -263,6 +290,34 @@ class IncomingCallFlowTest(unittest.TestCase):
         self.assertIn("handleCallState", calls)
         self.assertIn('phone or "unknown"', app)
         self.assertIn("Входящий звонок — новая задача", app)
+
+
+class CallerIdAndroidTest(unittest.TestCase):
+    def test_screening_service_and_contact_name(self):
+        # Regression: broadcasts often deliver no caller number, so the
+        # PC note opened with "number hidden" and no contact name.
+        root = os.path.join(os.path.dirname(__file__), "..", "android",
+                            "app", "src", "main")
+        manifest = open(os.path.join(root, "AndroidManifest.xml"),
+                        encoding="utf-8").read()
+        screening = open(os.path.join(
+            root, "java", "by", "zadachi", "calls",
+            "ZadachiCallScreeningService.java"), encoding="utf-8").read()
+        reporter = open(os.path.join(
+            root, "java", "by", "zadachi", "calls", "CallReporter.java"),
+            encoding="utf-8").read()
+        main = open(os.path.join(
+            root, "java", "by", "zadachi", "calls", "MainActivity.java"),
+            encoding="utf-8").read()
+
+        self.assertIn("android.permission.READ_CONTACTS", manifest)
+        self.assertIn(".ZadachiCallScreeningService", manifest)
+        self.assertIn("android.telecom.CallScreeningService", manifest)
+        self.assertIn("setDisallowCall(false)", screening)
+        self.assertIn("isActiveHere", screening)
+        self.assertIn("PhoneLookup", reporter)
+        self.assertIn('\\"name\\"', reporter)
+        self.assertIn("ROLE_CALL_SCREENING", main)
 
 
 class DialerLaunchTest(unittest.TestCase):

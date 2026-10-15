@@ -163,6 +163,15 @@ class ZadachiApp(tk.Tk):
         self._clipboard_phone = ""
         self._hotkey_down = False
         self._call_popup = None
+        self._popup_phone_entry = None
+        self._popup_name_entry = None
+        self._popup_phone_var = None
+        self._popup_name_var = None
+        # De-duplication of the same call reported by several Android
+        # sources (broadcast, telephony callback, call screening).
+        self._last_incoming_call_id = 0
+        self._last_incoming_phone = ""
+        self._last_incoming_at = 0.0
         self.tray = None
 
         self._build_ui()
@@ -237,7 +246,7 @@ class ZadachiApp(tk.Tk):
         ttk.Button(bar, text="✔ Выполнено", command=self._task_done).pack(side="left", padx=4)
         ttk.Button(bar, text="⏰ +10 минут", command=lambda: self._task_snooze(600)).pack(side="left", padx=4)
         ttk.Button(bar, text="🗑 Удалить", command=self._task_delete).pack(side="left")
-        ttk.Button(bar, text="📞 Позвонить", command=self._task_call).pack(side="left", padx=4)
+        ttk.Button(bar, text="📞 Позвонить по задаче", command=self._task_call).pack(side="left", padx=4)
         ttk.Button(bar, text="Обновить", command=self.refresh_tasks).pack(side="right")
         self.show_done_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(bar, text="Показать выполненные", variable=self.show_done_var,
@@ -458,11 +467,24 @@ class ZadachiApp(tk.Tk):
 
     def _task_call(self):
         tid = self._selected(self.tasks_tree)
-        if tid:
-            for t in self.db.list_tasks(include_done=True):
-                if t["id"] == tid and t["phone"]:
-                    self.call_phone(t["phone"])
-                    return
+        if not tid:
+            messagebox.showwarning("Zadachi", "Сначала выберите задачу в списке.")
+            return
+        task = self.db.get_task(tid)
+        if not task:
+            return
+        phone = protocol.normalize_phone(task["phone"] or "")
+        if not protocol.is_phone_like(phone):
+            # Never fail silently: let the user fill the number in.
+            messagebox.showwarning(
+                "Zadachi",
+                "У этой задачи не указан телефон. Откроется окно "
+                "редактирования — впишите номер и сохраните, затем "
+                "нажмите «Позвонить по задаче» ещё раз.")
+            self._edit_task_dialog(task)
+            return
+        self._set_status(f"Отправляю {phone} на телефон…")
+        self.call_phone(phone)
 
     def _call_selected_call(self):
         cid = self._selected(self.calls_tree)
@@ -500,19 +522,73 @@ class ZadachiApp(tk.Tk):
             p = ev["payload"]
             phone = protocol.normalize_phone(p.get("number") or p.get("phone") or "")
             status = str(p.get("event") or p.get("status") or "incoming")
+            supplied_name = str(p.get("name") or p.get("contactName") or "").strip()
+            # Name priority: phone's own address book (sent by Android),
+            # then our accumulated contacts/history (format-tolerant).
+            name = supplied_name or (self.db.name_for_phone(phone) if phone else "")
+            is_incoming = status in ("incoming", "ringing", "call")
+            now = time.time()
+            same_call = (
+                is_incoming and self._last_incoming_call_id
+                and now - self._last_incoming_at < 30
+                and (not phone or not self._last_incoming_phone
+                     or protocol.phones_match(phone, self._last_incoming_phone)))
+            if same_call:
+                # The same call reported again, now possibly identified:
+                # update the journal row and the already-open task note
+                # instead of creating a duplicate call.
+                call_id = self._last_incoming_call_id
+                if phone:
+                    self.db.update_call_phone_name(call_id, phone, name)
+                    self._last_incoming_phone = phone
+                self._last_incoming_at = now
+                self._update_call_popup(phone, name)
+                self.refresh_calls()
+                return
             # Even a hidden/empty number must immediately open the new-task
             # note: the user can type the number and task while it rings.
-            name = self.db.name_for_phone(phone) if phone else ""
             call_id = self.db.add_call(phone or "unknown", status=status, name=name,
                                        device=str(p.get("device", "")))
+            if is_incoming:
+                self._last_incoming_call_id = call_id
+                self._last_incoming_phone = phone
+                self._last_incoming_at = now
+            elif status in ("missed", "ended"):
+                self._last_incoming_at = 0.0
+                self._last_incoming_phone = ""
             self.refresh_calls()
-            if status in ("incoming", "ringing", "call"):
-                self._show_call_popup(phone, call_id)
+            if is_incoming:
+                self._show_call_popup(phone, call_id, name=name)
         elif ev["type"] == "ping":
             self._set_status(f"Телефон на связи: {ip}")
 
+    def _update_call_popup(self, phone, name):
+        """Fill number/name into the already-open task note when a later
+        event identifies the caller (without touching typed text)."""
+        if self._call_popup is None:
+            return
+        try:
+            if not self._call_popup.winfo_exists():
+                return
+        except tk.TclError:
+            self._call_popup = None
+            return
+        if phone:
+            if self._popup_phone_var is not None:
+                self._popup_phone_var.set(phone)
+            entry = self._popup_phone_entry
+            if entry is not None and not entry.get().strip():
+                entry.insert(0, phone)
+        if name:
+            if self._popup_name_var is not None and not self._popup_name_var.get():
+                self._popup_name_var.set(name)
+            entry = self._popup_name_entry
+            if entry is not None and not entry.get().strip():
+                entry.insert(0, name)
+        self._call_popup.lift()
+
     # -------------------------------------------------------- call popup
-    def _show_call_popup(self, phone, call_id):
+    def _show_call_popup(self, phone, call_id, name=""):
         if self._call_popup is not None:
             try:
                 if self._call_popup.winfo_exists():
@@ -532,15 +608,25 @@ class ZadachiApp(tk.Tk):
         win.title("Входящий звонок — новая задача")
         win.attributes("-topmost", True)
         win.geometry("430x330")
-        win.protocol("WM_DELETE_WINDOW", lambda: (win.destroy(), setattr(self, "_call_popup", None)))
+
+        def close_popup():
+            self._call_popup = None
+            self._popup_phone_entry = None
+            self._popup_name_entry = None
+            self._popup_phone_var = None
+            self._popup_name_var = None
+            win.destroy()
+
+        win.protocol("WM_DELETE_WINDOW", close_popup)
 
         ttk.Label(win, text="📞 Входящий звонок — новая задача",
                   font=("Segoe UI", 13, "bold")).pack(pady=(10, 2))
-        ttk.Label(win, text=phone or "Номер скрыт",
+        known = name or (self.db.name_for_phone(phone) if phone else "")
+        self._popup_phone_var = tk.StringVar(value=phone or "Номер скрыт")
+        self._popup_name_var = tk.StringVar(value=known or "")
+        ttk.Label(win, textvariable=self._popup_phone_var,
                   font=("Segoe UI", 16, "bold")).pack()
-        known = self.db.name_for_phone(phone) if phone else ""
-        if known:
-            ttk.Label(win, text=known).pack()
+        ttk.Label(win, textvariable=self._popup_name_var).pack()
 
         form = ttk.Frame(win, padding=10)
         form.pack(fill="x")
@@ -549,12 +635,14 @@ class ZadachiApp(tk.Tk):
         phone_e.grid(row=0, column=1, sticky="we", pady=2)
         if phone:
             phone_e.insert(0, phone)
+        self._popup_phone_entry = phone_e
 
         ttk.Label(form, text="Имя:").grid(row=1, column=0, sticky="w", pady=2)
         name_e = AutocompleteEntry(form, self.db.suggest_names, width=32)
         name_e.grid(row=1, column=1, sticky="we", pady=2)
         if known:
             name_e.insert(0, known)
+        self._popup_name_entry = name_e
         ttk.Label(form, text="Заявка/задача:").grid(row=2, column=0, sticky="w", pady=2)
         title_e = AutocompleteEntry(form, self.db.suggest_titles, width=32)
         title_e.grid(row=2, column=1, sticky="we", pady=2)
@@ -576,13 +664,12 @@ class ZadachiApp(tk.Tk):
             self.db.add_task(title, phone=entered_phone, name=name_e.get().strip(),
                              remind_at=remind_at, call_id=call_id)
             self.refresh_tasks()
-            win.destroy()
-            self._call_popup = None
+            close_popup()
 
         bar = ttk.Frame(win)
         bar.pack(pady=8)
         ttk.Button(bar, text="💾 Сохранить заявку", command=save).pack(side="left", padx=4)
-        ttk.Button(bar, text="Пропустить", command=lambda: (win.destroy(), setattr(self, "_call_popup", None))).pack(side="left")
+        ttk.Button(bar, text="Пропустить", command=close_popup).pack(side="left")
         win.bind("<Return>", lambda e: save())
 
     # --------------------------------------------------- new task / dial

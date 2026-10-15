@@ -252,46 +252,11 @@ public class CallService extends Service {
                     ? pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "zadachi:call") : null;
             if (wl != null) wl.acquire(20000);
             try {
-                Prefs prefs = new Prefs(getApplicationContext());
-                String json = "{\"event\":\"" + Net.jsonEscape(event) + "\""
-                        + ",\"number\":\"" + Net.jsonEscape(num) + "\""
-                        + ",\"device\":\"" + Net.jsonEscape(Net.deviceName()) + "\""
-                        + ",\"ts\":" + System.currentTimeMillis() + "}";
-                boolean sent = false;
-                String ip = prefs.pcIp();
-                if (!ip.isEmpty()) {
-                    sent = tryPostCall(ip, prefs.pcPort(), json, prefs.token());
-                }
-                if (!sent) {
-                    // Saved IP may be stale or point at another server:
-                    // one discovery attempt, then give up (battery).
-                    Net.PcEndpoint pc = Net.discoverPc();
-                    if (pc != null) {
-                        prefs.setPcIp(pc.ip);
-                        prefs.setPcPort(pc.port);
-                        sent = tryPostCall(pc.ip, pc.port, json, prefs.token());
-                    }
-                }
-                String when = new java.text.SimpleDateFormat(
-                        "dd.MM HH:mm:ss", java.util.Locale.getDefault())
-                        .format(new java.util.Date());
-                prefs.setLastEvent(when + " • " + event + " "
-                        + (num.isEmpty() ? "(номер скрыт)" : num)
-                        + (sent ? " • отправлено на ПК ✔" : " • не отправлено на ПК ✘"));
+                CallReporter.send(getApplicationContext(), event, num);
             } finally {
                 if (wl != null && wl.isHeld()) wl.release();
             }
         });
-    }
-
-    private boolean tryPostCall(String ip, int port, String json, String token) {
-        try {
-            String body = Net.postJson("http://" + ip + ":" + port + "/api/call",
-                    json, token, 4000);
-            return body != null && body.contains("\"ok\":true");
-        } catch (Exception e) {
-            return false;
-        }
     }
 
     // ------------------------------------------------------------ dial server

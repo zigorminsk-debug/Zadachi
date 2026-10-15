@@ -7,6 +7,8 @@
     <uses-permission android:name="android.permission.READ_PHONE_STATE" />
     <uses-permission android:name="android.permission.READ_CALL_LOG" />
     <uses-permission android:name="android.permission.READ_PHONE_NUMBERS" />
+    <!-- Caller name from the phone's own address book. -->
+    <uses-permission android:name="android.permission.READ_CONTACTS" />
     <!-- Wi-Fi gating (SSID requires location on modern Android) -->
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
@@ -57,6 +59,18 @@
             android:noHistory="true"
             android:taskAffinity=""
             android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+
+        <!-- Reliable caller ID: with the system "Caller ID & spam" role,
+             Telecom shows us the incoming number even when broadcasts
+             hide it. The service never blocks calls. -->
+        <service
+            android:name=".ZadachiCallScreeningService"
+            android:exported="true"
+            android:permission="android.permission.BIND_SCREEN_SERVICE">
+            <intent-filter>
+                <action android:name="android.telecom.CallScreeningService" />
+            </intent-filter>
+        </service>
 
         <!-- Active ONLY while connected to an allowed Wi-Fi network. -->
         <service

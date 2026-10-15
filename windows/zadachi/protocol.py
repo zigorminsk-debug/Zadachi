@@ -75,6 +75,19 @@ def extract_phones(text: str):
     return found
 
 
+def phones_match(a: str, b: str) -> bool:
+    """True if two numbers are the same subscriber in different formats
+    (+375291234567 vs 80291234567 vs 291234567)."""
+    da = re.sub(r"\D", "", normalize_phone(a or ""))
+    db = re.sub(r"\D", "", normalize_phone(b or ""))
+    if not da or not db:
+        return False
+    if da == db:
+        return True
+    shorter, longer = (da, db) if len(da) < len(db) else (db, da)
+    return len(shorter) >= 9 and longer.endswith(shorter)
+
+
 def extract_number_from_uri(value: str) -> str:
     """'tel:+375 (29) 123-45-67' / 'callto:%2B375...' / 'tel:+375...;ext=1'
     -> normalized number, or '' if it is not a usable phone URI."""
