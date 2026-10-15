@@ -1,0 +1,5 @@
+// Top-level build file. No third-party app dependencies are used:
+// the app is written against the plain Android SDK only.
+plugins {
+    id 'com.android.application' version '8.7.3' apply false
+}

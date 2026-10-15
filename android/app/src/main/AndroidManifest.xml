@@ -1,0 +1,134 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Calls. READ_CALL_LOG is required since Android 9 for third-party
+         apps to receive the caller's number in PHONE_STATE broadcasts;
+         without it the number arrives empty. -->
+    <uses-permission android:name="android.permission.READ_PHONE_STATE" />
+    <uses-permission android:name="android.permission.READ_CALL_LOG" />
+    <uses-permission android:name="android.permission.READ_PHONE_NUMBERS" />
+    <!-- Caller name from the phone's own address book. -->
+    <uses-permission android:name="android.permission.READ_CONTACTS" />
+    <!-- Wi-Fi gating (SSID requires location on modern Android) -->
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES"
+        android:usesPermissionFlags="neverForLocation" />
+    <!-- LAN with the PC -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Android 14: FGS type connectedDevice additionally requires at least
+         one companion permission from its list; CHANGE_NETWORK_STATE is a
+         normal (auto-granted) permission and matches our LAN use. Without
+         it, starting CallService crashes with SecurityException. -->
+    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
+    <!-- Service only runs on allowed Wi-Fi networks -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Lets a PC-initiated call pop the dialer over other apps; where the
+         system denies full-screen, the same action stays as a notification. -->
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+    <!-- Exemption that lets our background service start the dialer
+         activity directly (AOSP BAL_ALLOW_SAW_PERMISSION). The app never
+         draws overlay windows; the user grants this in system settings. -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+
+    <application
+        android:allowBackup="false"
+        android:networkSecurityConfig="@xml/network_security_config"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:label="Zadachi — звонки"
+        android:supportsRtl="true">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- Invisible trampoline to the system dialer for PC-initiated calls. -->
+        <activity
+            android:name=".DialActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:launchMode="singleInstance"
+            android:noHistory="true"
+            android:showWhenLocked="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:turnScreenOn="true" />
+
+        <!-- Reliable caller ID: with the system "Caller ID & spam" role,
+             Telecom shows us the incoming number even when broadcasts
+             hide it. The service never blocks calls. -->
+        <service
+            android:name=".ZadachiCallScreeningService"
+            android:exported="true"
+            android:permission="android.permission.BIND_SCREEN_SERVICE">
+            <intent-filter>
+                <action android:name="android.telecom.CallScreeningService" />
+            </intent-filter>
+        </service>
+
+        <!-- Active ONLY while connected to an allowed Wi-Fi network. -->
+        <service
+            android:name=".CallService"
+            android:exported="false"
+            android:foregroundServiceType="connectedDevice" />
+
+        <!-- Cheap system-scheduled Wi-Fi gate check (JobScheduler, >=15 min,
+             doze-friendly; no polling, no wakelocks). -->
+        <service
+            android:name=".GateJobService"
+            android:exported="false"
+            android:permission="android.permission.BIND_JOB_SERVICE" />
+
+        <receiver
+            android:name=".BootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Start/stop the call service as soon as Wi-Fi changes. -->
+        <receiver
+            android:name=".WifiChangeReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.net.wifi.STATE_CHANGE" />
+                <action android:name="android.net.wifi.supplicant.CONNECTION_CHANGE" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Calls outside allowed Wi-Fi: CallService is stopped then.
+             ACTION_PHONE_STATE_CHANGED is exempt from Android's implicit
+             broadcast limits, so this receiver wakes only for calls and
+             can offer a reminder after the call ends. -->
+        <receiver
+            android:name=".OfflineCallReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.PHONE_STATE" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Buttons in the offline-call notification. -->
+        <receiver
+            android:name=".OfflineReminderActionReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="by.zadachi.calls.action.OFFLINE_REMIND" />
+                <action android:name="by.zadachi.calls.action.OFFLINE_DISMISS" />
+            </intent-filter>
+        </receiver>
+    </application>
+</manifest>
