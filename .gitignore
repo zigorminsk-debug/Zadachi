@@ -1,3 +1,8 @@
+zadachi.db
+zadachi.db-journal
+zadachi.db-wal
+zadachi.db-shm
+windows/zadachi.db
 __pycache__/
 *.pyc
 *.pyo

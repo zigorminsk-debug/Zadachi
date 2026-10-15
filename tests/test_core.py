@@ -8,6 +8,7 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "windows"))
 
 from zadachi import autostart, protocol, telhandler  # noqa: E402
+from zadachi import db as db_module                  # noqa: E402
 from zadachi.db import Database                      # noqa: E402
 from zadachi.tray import TrayIcon                    # noqa: E402
 
@@ -84,6 +85,70 @@ class DatabaseTest(unittest.TestCase):
         self.assertEqual(self.db.due_tasks(), [])
         self.db.set_task_done(tid, True)
         self.assertEqual(self.db.list_tasks(), [])
+
+    def test_update_task(self):
+        tid = self.db.add_task("Старая заявка", phone="+375291112233")
+        self.db.update_task(tid, "Новая заявка", phone="+375294445566",
+                            name="Пётр", remind_at=1234567890)
+        task = self.db.get_task(tid)
+        self.assertEqual(task["title"], "Новая заявка")
+        self.assertEqual(task["phone"], "+375294445566")
+        self.assertEqual(task["name"], "Пётр")
+        self.assertEqual(task["remind_at"], 1234567890)
+        self.assertEqual(self.db.name_for_phone("+375294445566"), "Пётр")
+
+
+class TaskInteractionTest(unittest.TestCase):
+    def test_double_click_edits_instead_of_completing(self):
+        # Regression: double-click used to mark the task done, so it
+        # silently vanished from the active task list.
+        root = os.path.join(os.path.dirname(__file__), "..")
+        app = open(os.path.join(root, "windows", "zadachi", "app.py"),
+                   encoding="utf-8").read()
+        self.assertIn('bind("<Double-1>", lambda e: self._task_edit_selected())', app)
+        self.assertNotIn('bind("<Double-1>", lambda e: self._task_done())', app)
+        self.assertIn("def _edit_task_dialog", app)
+
+
+class PortableDatabaseTest(unittest.TestCase):
+    def test_legacy_db_is_copied_next_to_program(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            legacy_dir = os.path.join(tmp, "AppData", "Zadachi")
+            os.makedirs(legacy_dir)
+            legacy = os.path.join(legacy_dir, "zadachi.db")
+            old = Database(legacy)
+            old.add_task("Не потерять эту заявку")
+            old.close()
+
+            portable = os.path.join(tmp, "Program", "zadachi.db")
+            chosen = db_module.resolve_db_path(
+                portable_path=portable,
+                legacy_path=legacy)
+            self.assertEqual(chosen, portable)
+            self.assertTrue(os.path.isfile(portable))
+
+            moved = Database(chosen)
+            titles = [t["title"] for t in moved.list_tasks()]
+            moved.close()
+            self.assertIn("Не потерять эту заявку", titles)
+
+    def test_existing_tasks_are_not_overwritten_by_legacy(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            legacy = os.path.join(tmp, "legacy.db")
+            old = Database(legacy)
+            old.add_task("Старая")
+            old.close()
+            portable = os.path.join(tmp, "zadachi.db")
+            current = Database(portable)
+            current.add_task("Текущая")
+            current.close()
+
+            chosen = db_module.resolve_db_path(portable, legacy)
+            self.assertEqual(chosen, portable)
+            current = Database(chosen)
+            titles = [t["title"] for t in current.list_tasks()]
+            current.close()
+            self.assertEqual(titles, ["Текущая"])
 
 
 class ServerTest(unittest.TestCase):
@@ -198,6 +263,27 @@ class IncomingCallFlowTest(unittest.TestCase):
         self.assertIn("handleCallState", calls)
         self.assertIn('phone or "unknown"', app)
         self.assertIn("Входящий звонок — новая задача", app)
+
+
+class DialerLaunchTest(unittest.TestCase):
+    def test_pc_call_reaches_dialer_despite_background_limits(self):
+        # Regression: a direct startActivity() from the service was
+        # silently blocked by Android, so the PC window closed and
+        # nothing happened on the phone. There must also be a
+        # full-screen/tappable notification path to the dialer.
+        root = os.path.join(os.path.dirname(__file__), "..", "android",
+                            "app", "src", "main")
+        manifest = open(os.path.join(root, "AndroidManifest.xml"),
+                        encoding="utf-8").read()
+        calls = open(os.path.join(root, "java", "by", "zadachi", "calls",
+                                  "CallService.java"), encoding="utf-8").read()
+        dial = open(os.path.join(root, "java", "by", "zadachi", "calls",
+                                 "DialActivity.java"), encoding="utf-8").read()
+        self.assertIn(".DialActivity", manifest)
+        self.assertIn("android.permission.USE_FULL_SCREEN_INTENT", manifest)
+        self.assertIn("setFullScreenIntent", calls)
+        self.assertIn("DialActivity.class", calls)
+        self.assertIn("Intent.ACTION_DIAL", dial)
 
 
 class AndroidManifestTest(unittest.TestCase):

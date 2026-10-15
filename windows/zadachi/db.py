@@ -1,5 +1,12 @@
 """SQLite storage (stdlib only).
 
+The database is portable: zadachi.db lives next to Zadachi.exe (or next
+to Zadachi.py in dev mode), so replacing/reinstalling the program file
+picks the existing database up again. A database created by older
+versions in %APPDATA%\\Zadachi is copied/merged automatically on the
+first run, so no tasks are lost by the move. If the program folder is
+not writable (e.g. Program Files), the %APPDATA% location is used.
+
 Tables
 ------
 calls       -- every incoming/outgoing call event received from the phone
@@ -11,7 +18,10 @@ Task/title and name suggestions are served from accumulated history
 from __future__ import annotations
 
 import os
+import shutil
 import sqlite3
+import sys
+import tempfile
 import threading
 import time
 
@@ -46,11 +56,101 @@ CREATE INDEX IF NOT EXISTS idx_tasks_remind ON tasks(remind_at, done);
 """
 
 
-def default_db_path() -> str:
+def portable_db_path() -> str:
+    """zadachi.db next to the program file (exe when frozen, Zadachi.py in dev)."""
+    if getattr(sys, "frozen", False):
+        base = os.path.dirname(os.path.abspath(sys.executable))
+    else:
+        base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(base, "zadachi.db")
+
+
+def legacy_db_path() -> str:
+    """Where versions <= the %APPDATA% layout kept the database."""
     base = os.environ.get("APPDATA") or os.path.expanduser("~")
-    folder = os.path.join(base, "Zadachi")
-    os.makedirs(folder, exist_ok=True)
-    return os.path.join(folder, "zadachi.db")
+    return os.path.join(base, "Zadachi", "zadachi.db")
+
+
+def _dir_writable(folder: str) -> bool:
+    try:
+        os.makedirs(folder, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(prefix=".zadachi-write-test-", dir=folder)
+        os.close(fd)
+        os.unlink(tmp)
+        return True
+    except OSError:
+        return False
+
+
+def _row_counts(conn) -> dict:
+    counts = {}
+    for table in ("calls", "tasks", "contacts"):
+        try:
+            counts[table] = conn.execute(
+                f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+        except sqlite3.Error:
+            counts[table] = 0
+    return counts
+
+
+def _merge_legacy_if_empty(portable_path: str, legacy_path: str):
+    """Import the old %APPDATA% DB if the portable one has no data yet."""
+    conn = sqlite3.connect(portable_path)
+    try:
+        conn.executescript(SCHEMA)
+        if sum(_row_counts(conn).values()):
+            return
+        conn.execute("ATTACH DATABASE ? AS legacy", (legacy_path,))
+        try:
+            if not sum(_row_counts(conn).values()):
+                # counts above were read before ATTACH; read legacy counts
+                legacy_total = 0
+                for table in ("calls", "tasks", "contacts"):
+                    try:
+                        legacy_total += conn.execute(
+                            f"SELECT COUNT(*) FROM legacy.{table}").fetchone()[0]
+                    except sqlite3.Error:
+                        pass
+                if legacy_total:
+                    conn.execute("INSERT INTO calls SELECT * FROM legacy.calls")
+                    conn.execute("INSERT INTO tasks SELECT * FROM legacy.tasks")
+                    conn.execute(
+                        "INSERT OR IGNORE INTO contacts SELECT * FROM legacy.contacts")
+                    conn.commit()
+        finally:
+            conn.execute("DETACH DATABASE legacy")
+    finally:
+        conn.close()
+
+
+def resolve_db_path(portable_path: str | None = None,
+                    legacy_path: str | None = None) -> str:
+    """Prefer the portable DB next to the program; migrate the legacy one.
+
+    Falls back to the legacy %APPDATA% path when the program folder is
+    not writable.
+    """
+    portable = portable_path or portable_db_path()
+    legacy = legacy_path or legacy_db_path()
+    if os.path.normcase(os.path.abspath(portable)) != os.path.normcase(
+            os.path.abspath(legacy)):
+        folder = os.path.dirname(os.path.abspath(portable))
+        if _dir_writable(folder):
+            try:
+                if os.path.isfile(legacy):
+                    if not os.path.exists(portable):
+                        shutil.copy2(legacy, portable)
+                    elif os.path.isfile(portable):
+                        _merge_legacy_if_empty(portable, legacy)
+                return portable
+            except (OSError, sqlite3.Error):
+                pass  # fall through to the legacy location
+    os.makedirs(os.path.dirname(legacy), exist_ok=True)
+    return legacy
+
+
+def default_db_path() -> str:
+    return resolve_db_path()
 
 
 class Database:
@@ -107,6 +207,29 @@ class Database:
         q += " ORDER BY (remind_at=0), remind_at, id DESC LIMIT ?"
         with self._lock:
             return [dict(r) for r in self._conn.execute(q, (limit,))]
+
+    def get_task(self, task_id):
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+            return dict(row) if row else None
+
+    def update_task(self, task_id, title, phone="", name="", remind_at=0,
+                    done=None):
+        """Edit an existing task (used by the double-click edit dialog)."""
+        with self._lock:
+            if done is None:
+                self._conn.execute(
+                    "UPDATE tasks SET title=?, phone=?, name=?, remind_at=? WHERE id=?",
+                    (title, phone, name, int(remind_at or 0), task_id))
+            else:
+                self._conn.execute(
+                    "UPDATE tasks SET title=?, phone=?, name=?, remind_at=?, done=? WHERE id=?",
+                    (title, phone, name, int(remind_at or 0),
+                     1 if done else 0, task_id))
+            self._conn.commit()
+        if name and phone:
+            self.learn_contact(phone, name)
 
     def set_task_done(self, task_id, done=True):
         with self._lock:

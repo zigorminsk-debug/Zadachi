@@ -228,14 +228,20 @@ class ZadachiApp(tk.Tk):
             self.tasks_tree.heading(col, text=title)
             self.tasks_tree.column(col, width=w)
         self.tasks_tree.pack(fill="both", expand=True)
-        self.tasks_tree.bind("<Double-1>", lambda e: self._task_done())
+        # Double-click edits the task. (It used to mark it done, so the
+        # task simply vanished from the active list — very surprising.)
+        self.tasks_tree.bind("<Double-1>", lambda e: self._task_edit_selected())
         bar = ttk.Frame(tab)
         bar.pack(fill="x", pady=6)
-        ttk.Button(bar, text="✔ Выполнено", command=self._task_done).pack(side="left")
+        ttk.Button(bar, text="✏ Изменить", command=self._task_edit_selected).pack(side="left")
+        ttk.Button(bar, text="✔ Выполнено", command=self._task_done).pack(side="left", padx=4)
         ttk.Button(bar, text="⏰ +10 минут", command=lambda: self._task_snooze(600)).pack(side="left", padx=4)
         ttk.Button(bar, text="🗑 Удалить", command=self._task_delete).pack(side="left")
         ttk.Button(bar, text="📞 Позвонить", command=self._task_call).pack(side="left", padx=4)
         ttk.Button(bar, text="Обновить", command=self.refresh_tasks).pack(side="right")
+        self.show_done_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(bar, text="Показать выполненные", variable=self.show_done_var,
+                        command=self.refresh_tasks).pack(side="right", padx=6)
 
     def _build_calls_tab(self, nb):
         tab = ttk.Frame(nb, padding=6)
@@ -285,12 +291,15 @@ class ZadachiApp(tk.Tk):
             ttk.Checkbutton(grid, text=text, variable=var,
                             command=self._save_toggles).grid(row=2 + i, column=0, columnspan=2, sticky="w", pady=2)
 
+        ttk.Label(tab, text=f"База данных: {self.db.path}\n"
+                            "Лежит рядом с Zadachi.exe — при обновлении заменяйте "
+                            "только exe, файл базы не удаляйте, он подхватится сам.",
+                  justify="left", wraplength=760).pack(anchor="w", pady=(10, 0))
+
         help_text = (
             "Как пользоваться:\n"
             "• Телефон и ПК должны быть в одной Wi-Fi сети (укажите её в Android-приложении).\n"
             "• При входящем звонке на телефоне здесь всплывёт окно — запишите заявку и таймер.\n"
-            "• Клик по номеру-ссылке (tel:) на любом сайте — звонок уходит на телефон\n"
-            "  (при первом клике браузер может попросить выбрать Zadachi). \n"
             "• Клик по номеру-ссылке (tel:) на любом сайте — звонок уходит на телефон\n"
             "  (при первом клике браузер может попросить выбрать Zadachi).\n"
             "• Скопируйте любой номер на ПК — появится кнопка звонка; либо нажмите Ctrl+Alt+D,\n"
@@ -339,10 +348,12 @@ class ZadachiApp(tk.Tk):
         if not hasattr(self, "tasks_tree"):
             return
         self.tasks_tree.delete(*self.tasks_tree.get_children())
-        for t in self.db.list_tasks(include_done=False):
+        include_done = bool(getattr(self, "show_done_var", None) and
+                            self.show_done_var.get())
+        for t in self.db.list_tasks(include_done=include_done):
             self.tasks_tree.insert("", "end", iid=str(t["id"]), values=(
                 fmt_ts(t["remind_at"]) if t["remind_at"] else "без срока",
-                t["title"], t["phone"], t["name"]))
+                ("✔ " if t["done"] else "") + t["title"], t["phone"], t["name"]))
 
     def refresh_calls(self):
         if not hasattr(self, "calls_tree"):
@@ -363,6 +374,74 @@ class ZadachiApp(tk.Tk):
             self.db.set_task_done(tid, True)
             self._notified.discard(tid)
             self.refresh_tasks()
+
+    def _task_edit_selected(self):
+        tid = self._selected(self.tasks_tree)
+        if tid:
+            task = self.db.get_task(tid)
+            if task:
+                self._edit_task_dialog(task)
+
+    def _edit_task_dialog(self, task):
+        win = tk.Toplevel(self)
+        win.title("Изменить задачу")
+        win.geometry("430x310")
+        win.attributes("-topmost", True)
+        form = ttk.Frame(win, padding=10)
+        form.pack(fill="x")
+
+        ttk.Label(form, text="Задача:").grid(row=0, column=0, sticky="w", pady=2)
+        title_e = AutocompleteEntry(form, self.db.suggest_titles, width=34)
+        title_e.grid(row=0, column=1, sticky="we", pady=2)
+        title_e.insert(0, task["title"])
+        title_e.focus_set()
+
+        ttk.Label(form, text="Телефон:").grid(row=1, column=0, sticky="w", pady=2)
+        phone_e = AutocompleteEntry(form, self.db.suggest_phones, width=34)
+        phone_e.grid(row=1, column=1, sticky="we", pady=2)
+        if task["phone"]:
+            phone_e.insert(0, task["phone"])
+
+        ttk.Label(form, text="Имя:").grid(row=2, column=0, sticky="w", pady=2)
+        name_e = AutocompleteEntry(form, self.db.suggest_names, width=34)
+        name_e.grid(row=2, column=1, sticky="we", pady=2)
+        if task["name"]:
+            name_e.insert(0, task["name"])
+
+        ttk.Label(form, text="Напоминание:").grid(row=3, column=0, sticky="w", pady=2)
+        keep_label = ("Оставить: " + fmt_ts(task["remind_at"])) if task["remind_at"] \
+            else "Оставить без напоминания"
+        remind_var = tk.StringVar(value=keep_label)
+        values = [keep_label] + [name for name, _ in REMIND_PRESETS]
+        ttk.Combobox(form, textvariable=remind_var, state="readonly", width=31,
+                     values=values).grid(row=3, column=1, sticky="we", pady=2)
+
+        done_var = tk.BooleanVar(value=bool(task["done"]))
+        ttk.Checkbutton(form, text="Выполнено", variable=done_var).grid(
+            row=4, column=1, sticky="w", pady=4)
+
+        def save():
+            title = title_e.get().strip()
+            if not title:
+                messagebox.showwarning("Zadachi", "Введите текст задачи.", parent=win)
+                return
+            choice = remind_var.get()
+            if choice == keep_label:
+                remind_at = int(task["remind_at"] or 0)
+            else:
+                seconds = dict(REMIND_PRESETS).get(choice, 0)
+                remind_at = int(time.time()) + seconds if seconds else 0
+            self.db.update_task(
+                task["id"], title,
+                phone=protocol.normalize_phone(phone_e.get()),
+                name=name_e.get().strip(),
+                remind_at=remind_at, done=bool(done_var.get()))
+            self._notified.discard(task["id"])
+            self.refresh_tasks()
+            win.destroy()
+
+        ttk.Button(win, text="💾 Сохранить", command=save).pack(pady=10)
+        win.bind("<Return>", lambda e: save())
 
     def _task_snooze(self, seconds):
         tid = self._selected(self.tasks_tree)
@@ -780,7 +859,8 @@ def run_call_request(number: str) -> bool:
             db.close()
 
             def done():
-                status.set(f"✔ Номер {number} открыт в звонилке телефона")
+                status.set(f"✔ Номер {number} передан на телефон: откроется звонилка "
+                           "или уведомление «Набрать номер»")
                 root.after(2500, root.destroy)
             root.after(0, done)
         except Exception as exc:

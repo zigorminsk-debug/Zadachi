@@ -370,11 +370,65 @@ public class CallService extends Service {
         } catch (Exception ignored) {}
     }
 
+    private static final String DIAL_CHANNEL = "zadachi_outgoing";
+
+    /**
+     * Open the number in the phone's default dialer.
+     *
+     * A direct startActivity() from a service is silently blocked by
+     * Android's background-activity-launch rules on many builds (the PC
+     * saw "OK", the small window closed, and nothing happened). So we
+     * additionally post a high-priority notification whose full-screen /
+     * tap action opens the same trampoline. DialActivity cancels the
+     * notification when the direct launch works, so there is no double
+     * action.
+     */
     private void openDialer(String number) {
+        int notificationId = 2000 + (int) (System.currentTimeMillis() % 100000);
+        Intent trampoline = new Intent(this, DialActivity.class);
+        trampoline.putExtra(DialActivity.EXTRA_NUMBER, number);
+        trampoline.putExtra(DialActivity.EXTRA_NOTIFICATION_ID, notificationId);
+        trampoline.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
+                | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+
+        NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+        if (nm != null) {
+            try {
+                PendingIntent pi = PendingIntent.getActivity(
+                        this, notificationId, trampoline,
+                        PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+                Notification.Builder builder;
+                if (Build.VERSION.SDK_INT >= 26) {
+                    NotificationChannel ch = new NotificationChannel(
+                            DIAL_CHANNEL, "Исходящие звонки с ПК",
+                            NotificationManager.IMPORTANCE_HIGH);
+                    ch.setDescription("Звонки, запущенные кликом на компьютере");
+                    nm.createNotificationChannel(ch);
+                    builder = new Notification.Builder(this, DIAL_CHANNEL);
+                } else {
+                    builder = new Notification.Builder(this)
+                            .setPriority(Notification.PRIORITY_HIGH);
+                }
+                Notification notification = builder
+                        .setContentTitle("Набрать номер с компьютера")
+                        .setContentText(number)
+                        .setSmallIcon(android.R.drawable.sym_call_outgoing)
+                        .setContentIntent(pi)
+                        .setFullScreenIntent(pi, true)
+                        .setAutoCancel(true)
+                        .build();
+                nm.notify(notificationId, notification);
+            } catch (RuntimeException e) {
+                Log.e("Zadachi", "Unable to post dial notification", e);
+            }
+        }
+
+        // Fast path where the platform allows it (e.g. screen unlocked
+        // with our foreground service treated as visible).
         try {
-            Intent dial = new Intent(Intent.ACTION_DIAL, Uri.parse("tel:" + Uri.encode(number)));
-            dial.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-            startActivity(dial); // default system dialer, user confirms the call
-        } catch (Exception ignored) {}
+            startActivity(trampoline);
+        } catch (RuntimeException e) {
+            Log.e("Zadachi", "Direct dialer launch blocked; notification remains", e);
+        }
     }
 }
