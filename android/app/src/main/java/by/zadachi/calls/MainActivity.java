@@ -41,14 +41,22 @@ public class MainActivity extends Activity {
         buildUi();
         WifiGate.schedule(this);
         WifiGate.evaluate(this);
+        // Without these permissions Android will not report real incoming
+        // calls/numbers (a manual test call would still work). Ask once.
+        if (Build.VERSION.SDK_INT >= 23 && !hasCallPermissions()) {
+            requestPermissions();
+        }
     }
 
     @Override
     protected void onResume() {
         super.onResume();
-        refreshStatus();
         rebuildSsidList();
         WifiGate.evaluate(this);
+        refreshStatus();
+        if (statusView != null) {
+            statusView.postDelayed(this::refreshStatus, 700);
+        }
     }
 
     // ------------------------------------------------------------------- UI
@@ -267,17 +275,38 @@ public class MainActivity extends Activity {
         boolean active = prefs.isActiveHere(ssid);
         PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
         boolean noOpt = pm != null && pm.isIgnoringBatteryOptimizations(getPackageName());
+        String serviceState;
+        if (!prefs.enabled()) serviceState = "выключено";
+        else if (!active) serviceState = "в фоне, сеть не разрешена";
+        else if (CallService.isRunning()) serviceState = "АКТИВНО (сервис запущен)";
+        else serviceState = "сеть разрешена, но сервис НЕ запущен";
         statusView.setText("Текущая сеть: " + (ssid.isEmpty() ? "—" : ssid)
-                + "\nСтатус: " + (!prefs.enabled() ? "выключено"
-                        : active ? "АКТИВНО (звонки уходят на ПК)" : "в фоне, сеть не разрешена")
+                + "\nСтатус: " + serviceState
+                + "\nДоступ к звонкам и номерам: "
+                        + (hasCallPermissions() ? "есть ✔" : "НЕТ — приложение не увидит реальный входящий номер")
                 + "\nПК: " + (prefs.pcIp().isEmpty() ? "не найден" : prefs.pcIp())
+                + (prefs.lastEvent().isEmpty() ? ""
+                        : "\nПоследний звонок: " + prefs.lastEvent())
                 + "\nОптимизация батареи: " + (noOpt ? "отключена ✔" : "включена (рекомендуется отключить)"));
     }
 
     // ------------------------------------------------------------- permissions
+    private boolean hasPermission(String permission) {
+        return Build.VERSION.SDK_INT < 23
+                || checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED;
+    }
+
+    /** Phone state + call log are both needed to see a real caller's number. */
+    private boolean hasCallPermissions() {
+        return hasPermission(Manifest.permission.READ_PHONE_STATE)
+                && hasPermission(Manifest.permission.READ_CALL_LOG);
+    }
+
     private void requestPermissions() {
         java.util.List<String> list = new java.util.ArrayList<>();
         list.add(Manifest.permission.READ_PHONE_STATE);
+        // Since Android 9 the caller's number is hidden without this.
+        list.add(Manifest.permission.READ_CALL_LOG);
         list.add(Manifest.permission.ACCESS_FINE_LOCATION);
         if (Build.VERSION.SDK_INT >= 31) list.add(Manifest.permission.READ_PHONE_NUMBERS);
         if (Build.VERSION.SDK_INT >= 33) list.add(Manifest.permission.POST_NOTIFICATIONS);
@@ -288,12 +317,10 @@ public class MainActivity extends Activity {
     @Override
     public void onRequestPermissionsResult(int code, String[] perms, int[] results) {
         super.onRequestPermissionsResult(code, perms, results);
-        boolean phoneOk = false;
-        for (int i = 0; i < perms.length; i++) {
-            if (Manifest.permission.READ_PHONE_STATE.equals(perms[i])
-                    && results[i] == PackageManager.PERMISSION_GRANTED) phoneOk = true;
+        if (!hasCallPermissions()) {
+            toast("Без разрешений «Телефон» и «Журнал звонков» Android не покажет "
+                    + "реальный входящий звонок и его номер.");
         }
-        if (!phoneOk) toast("Без разрешения на звонки приложение не увидит входящие вызовы.");
         refreshStatus();
         WifiGate.evaluate(this);
     }

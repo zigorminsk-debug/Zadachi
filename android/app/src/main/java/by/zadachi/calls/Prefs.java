@@ -26,6 +26,12 @@ final class Prefs {
     int pcPort() { return sp.getInt("pcPort", 39272); }
     void setPcPort(int p) { sp.edit().putInt("pcPort", p).apply(); }
 
+    /** Human-readable diagnostics of the most recent real call event. */
+    String lastEvent() { return sp.getString("lastEvent", ""); }
+    void setLastEvent(String text) {
+        sp.edit().putString("lastEvent", text == null ? "" : text).apply();
+    }
+
     Set<String> allowedSsids() {
         return new HashSet<>(sp.getStringSet("ssids", new HashSet<>()));
     }

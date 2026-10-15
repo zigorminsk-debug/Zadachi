@@ -1,8 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- Calls -->
+    <!-- Calls. READ_CALL_LOG is required since Android 9 for third-party
+         apps to receive the caller's number in PHONE_STATE broadcasts;
+         without it the number arrives empty. -->
     <uses-permission android:name="android.permission.READ_PHONE_STATE" />
+    <uses-permission android:name="android.permission.READ_CALL_LOG" />
     <uses-permission android:name="android.permission.READ_PHONE_NUMBERS" />
     <!-- Wi-Fi gating (SSID requires location on modern Android) -->
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
@@ -60,6 +63,16 @@
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Start/stop the call service as soon as Wi-Fi changes. -->
+        <receiver
+            android:name=".WifiChangeReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.net.wifi.STATE_CHANGE" />
+                <action android:name="android.net.wifi.supplicant.CONNECTION_CHANGE" />
             </intent-filter>
         </receiver>
     </application>

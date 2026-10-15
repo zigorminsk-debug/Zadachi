@@ -174,6 +174,32 @@ class AndroidPairingTest(unittest.TestCase):
         self.assertIn("Net.isZadachiPc(ip, port)", main)
 
 
+class IncomingCallFlowTest(unittest.TestCase):
+    def test_real_incoming_call_can_open_task_note(self):
+        # Regression: Android hid the caller number without READ_CALL_LOG,
+        # so the phone sent an empty number and the PC silently dropped
+        # the event instead of opening the new-task note.
+        root = os.path.join(os.path.dirname(__file__), "..")
+        manifest = open(os.path.join(
+            root, "android", "app", "src", "main", "AndroidManifest.xml"),
+            encoding="utf-8").read()
+        calls = open(os.path.join(
+            root, "android", "app", "src", "main", "java", "by", "zadachi",
+            "calls", "CallService.java"), encoding="utf-8").read()
+        main = open(os.path.join(
+            root, "android", "app", "src", "main", "java", "by", "zadachi",
+            "calls", "MainActivity.java"), encoding="utf-8").read()
+        app = open(os.path.join(root, "windows", "zadachi", "app.py"),
+                   encoding="utf-8").read()
+
+        self.assertIn("android.permission.READ_CALL_LOG", manifest)
+        self.assertIn("Manifest.permission.READ_CALL_LOG", main)
+        self.assertIn("TelephonyCallback", calls)
+        self.assertIn("handleCallState", calls)
+        self.assertIn('phone or "unknown"', app)
+        self.assertIn("Входящий звонок — новая задача", app)
+
+
 class AndroidManifestTest(unittest.TestCase):
     def test_connected_device_fgs_has_companion_permission(self):
         # Regression: Android 14 crashes CallService with SecurityException

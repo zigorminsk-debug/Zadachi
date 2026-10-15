@@ -420,11 +420,11 @@ class ZadachiApp(tk.Tk):
         if ev["type"] == "call":
             p = ev["payload"]
             phone = protocol.normalize_phone(p.get("number") or p.get("phone") or "")
-            if not phone:
-                return
             status = str(p.get("event") or p.get("status") or "incoming")
-            name = self.db.name_for_phone(phone)
-            call_id = self.db.add_call(phone, status=status, name=name,
+            # Even a hidden/empty number must immediately open the new-task
+            # note: the user can type the number and task while it rings.
+            name = self.db.name_for_phone(phone) if phone else ""
+            call_id = self.db.add_call(phone or "unknown", status=status, name=name,
                                        device=str(p.get("device", "")))
             self.refresh_calls()
             if status in ("incoming", "ringing", "call"):
@@ -436,46 +436,65 @@ class ZadachiApp(tk.Tk):
     def _show_call_popup(self, phone, call_id):
         if self._call_popup is not None:
             try:
-                self._call_popup.destroy()
+                if self._call_popup.winfo_exists():
+                    # A task note is already open (possibly for this same
+                    # call): raise it instead of destroying typed text.
+                    self._call_popup.lift()
+                    self._call_popup.focus_force()
+                    return
             except tk.TclError:
-                pass
+                self._call_popup = None
         beep(self.settings)
+        self.state("normal")
         self.deiconify()
+        self.lift()
         win = tk.Toplevel(self)
         self._call_popup = win
-        win.title("Входящий звонок")
+        win.title("Входящий звонок — новая задача")
         win.attributes("-topmost", True)
-        win.geometry("420x300")
+        win.geometry("430x330")
         win.protocol("WM_DELETE_WINDOW", lambda: (win.destroy(), setattr(self, "_call_popup", None)))
 
-        ttk.Label(win, text="📞 Входящий звонок", font=("Segoe UI", 13, "bold")).pack(pady=(10, 2))
-        ttk.Label(win, text=phone, font=("Segoe UI", 16, "bold")).pack()
-        known = self.db.name_for_phone(phone)
+        ttk.Label(win, text="📞 Входящий звонок — новая задача",
+                  font=("Segoe UI", 13, "bold")).pack(pady=(10, 2))
+        ttk.Label(win, text=phone or "Номер скрыт",
+                  font=("Segoe UI", 16, "bold")).pack()
+        known = self.db.name_for_phone(phone) if phone else ""
         if known:
             ttk.Label(win, text=known).pack()
 
         form = ttk.Frame(win, padding=10)
         form.pack(fill="x")
-        ttk.Label(form, text="Имя:").grid(row=0, column=0, sticky="w", pady=2)
+        ttk.Label(form, text="Телефон:").grid(row=0, column=0, sticky="w", pady=2)
+        phone_e = AutocompleteEntry(form, self.db.suggest_phones, width=32)
+        phone_e.grid(row=0, column=1, sticky="we", pady=2)
+        if phone:
+            phone_e.insert(0, phone)
+
+        ttk.Label(form, text="Имя:").grid(row=1, column=0, sticky="w", pady=2)
         name_e = AutocompleteEntry(form, self.db.suggest_names, width=32)
-        name_e.grid(row=0, column=1, sticky="we", pady=2)
+        name_e.grid(row=1, column=1, sticky="we", pady=2)
         if known:
             name_e.insert(0, known)
-        ttk.Label(form, text="Заявка/задача:").grid(row=1, column=0, sticky="w", pady=2)
+        ttk.Label(form, text="Заявка/задача:").grid(row=2, column=0, sticky="w", pady=2)
         title_e = AutocompleteEntry(form, self.db.suggest_titles, width=32)
-        title_e.grid(row=1, column=1, sticky="we", pady=2)
+        title_e.grid(row=2, column=1, sticky="we", pady=2)
         title_e.focus_set()
 
-        ttk.Label(form, text="Напоминание:").grid(row=2, column=0, sticky="w", pady=2)
+        ttk.Label(form, text="Напоминание:").grid(row=3, column=0, sticky="w", pady=2)
         remind_var = tk.StringVar(value=REMIND_PRESETS[2][0])
         ttk.Combobox(form, textvariable=remind_var, state="readonly", width=29,
-                     values=[n for n, _ in REMIND_PRESETS]).grid(row=2, column=1, sticky="we", pady=2)
+                     values=[n for n, _ in REMIND_PRESETS]).grid(row=3, column=1, sticky="we", pady=2)
 
         def save():
             seconds = dict(REMIND_PRESETS).get(remind_var.get(), 0)
             remind_at = int(time.time()) + seconds if seconds else 0
-            title = title_e.get().strip() or f"Перезвонить {phone}"
-            self.db.add_task(title, phone=phone, name=name_e.get().strip(),
+            entered_phone = protocol.normalize_phone(phone_e.get())
+            title = title_e.get().strip()
+            if not title:
+                title = (f"Перезвонить {entered_phone}" if entered_phone
+                         else "Задача по входящему звонку")
+            self.db.add_task(title, phone=entered_phone, name=name_e.get().strip(),
                              remind_at=remind_at, call_id=call_id)
             self.refresh_tasks()
             win.destroy()

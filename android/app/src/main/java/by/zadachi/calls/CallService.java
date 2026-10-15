@@ -14,6 +14,8 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.IBinder;
 import android.os.PowerManager;
+import android.telephony.PhoneStateListener;
+import android.telephony.TelephonyCallback;
 import android.telephony.TelephonyManager;
 import android.util.Log;
 
@@ -43,9 +45,16 @@ public class CallService extends Service {
     private volatile boolean running;
     private ExecutorService io;
     private BroadcastReceiver phoneReceiver;
+    private Object telephonyListener;
     private String lastRingingNumber = "";
     private boolean wasRinging = false;
     private boolean wasOffhook = false;
+    private boolean incomingSent = false;
+    private boolean incomingNumberSent = false;
+    private static volatile boolean serviceRunning = false;
+
+    /** Used by the settings screen to show that call tracking is really on. */
+    static boolean isRunning() { return serviceRunning; }
 
     @Override
     public IBinder onBind(Intent intent) { return null; }
@@ -59,7 +68,9 @@ public class CallService extends Service {
             return;
         }
         registerPhoneReceiver();
+        registerTelephonyListener();
         running = true;
+        serviceRunning = true;
         io.execute(this::serverLoop);
     }
 
@@ -71,6 +82,8 @@ public class CallService extends Service {
     @Override
     public void onDestroy() {
         running = false;
+        serviceRunning = false;
+        unregisterTelephonyListener();
         if (phoneReceiver != null) {
             try { unregisterReceiver(phoneReceiver); } catch (Exception ignored) {}
         }
@@ -122,21 +135,13 @@ public class CallService extends Service {
             public void onReceive(Context ctx, Intent intent) {
                 String state = intent.getStringExtra(TelephonyManager.EXTRA_STATE);
                 String number = intent.getStringExtra(TelephonyManager.EXTRA_INCOMING_NUMBER);
+                int callState = TelephonyManager.CALL_STATE_IDLE;
                 if (TelephonyManager.EXTRA_STATE_RINGING.equals(state)) {
-                    wasRinging = true;
-                    if (number != null && !number.isEmpty()) lastRingingNumber = number;
-                    sendCallEvent("incoming", lastRingingNumber);
+                    callState = TelephonyManager.CALL_STATE_RINGING;
                 } else if (TelephonyManager.EXTRA_STATE_OFFHOOK.equals(state)) {
-                    wasOffhook = true;
-                } else if (TelephonyManager.EXTRA_STATE_IDLE.equals(state)) {
-                    if (wasRinging && !wasOffhook) {
-                        sendCallEvent("missed", lastRingingNumber);
-                    } else if (wasOffhook) {
-                        sendCallEvent("ended", lastRingingNumber);
-                    }
-                    wasRinging = false;
-                    wasOffhook = false;
+                    callState = TelephonyManager.CALL_STATE_OFFHOOK;
                 }
+                handleCallState(callState, number);
             }
         };
         IntentFilter f = new IntentFilter(TelephonyManager.ACTION_PHONE_STATE_CHANGED);
@@ -147,13 +152,105 @@ public class CallService extends Service {
         }
     }
 
+    /**
+     * Second, independent call-state source. Some OEM builds deliver the
+     * PHONE_STATE broadcast without a number or not at all; the telephony
+     * listener sees the same transitions, and events are de-duplicated.
+     */
+    @SuppressWarnings("deprecation")
+    private void registerTelephonyListener() {
+        try {
+            TelephonyManager tm = (TelephonyManager) getSystemService(TELEPHONY_SERVICE);
+            if (tm == null) return;
+            if (Build.VERSION.SDK_INT >= 31) {
+                CallStateCallback callback = new CallStateCallback();
+                telephonyListener = callback;
+                tm.registerTelephonyCallback(getMainExecutor(), callback);
+            } else {
+                PhoneStateListener listener = new PhoneStateListener() {
+                    @Override
+                    public void onCallStateChanged(int state, String phoneNumber) {
+                        handleCallState(state, phoneNumber);
+                    }
+                };
+                telephonyListener = listener;
+                tm.listen(listener, PhoneStateListener.LISTEN_CALL_STATE);
+            }
+        } catch (Throwable e) {
+            // Missing READ_PHONE_STATE, or TelephonyCallback unavailable on
+            // an old Android build. The broadcast path may still work; the
+            // settings screen asks the user for permissions.
+            Log.e("Zadachi", "Unable to register telephony listener", e);
+        }
+    }
+
+    private final class CallStateCallback extends TelephonyCallback
+            implements TelephonyCallback.CallStateListener {
+        @Override
+        public void onCallStateChanged(int state) {
+            // TelephonyCallback carries no number; the broadcast and the
+            // call log permissions supply it. State alone is enough to
+            // open the task window on the PC immediately.
+            handleCallState(state, "");
+        }
+    }
+
+    @SuppressWarnings("deprecation")
+    private void unregisterTelephonyListener() {
+        if (telephonyListener == null) return;
+        try {
+            TelephonyManager tm = (TelephonyManager) getSystemService(TELEPHONY_SERVICE);
+            if (tm == null) return;
+            if (Build.VERSION.SDK_INT >= 31
+                    && telephonyListener instanceof TelephonyCallback) {
+                tm.unregisterTelephonyCallback((TelephonyCallback) telephonyListener);
+            } else if (telephonyListener instanceof PhoneStateListener) {
+                tm.listen((PhoneStateListener) telephonyListener, PhoneStateListener.LISTEN_NONE);
+            }
+        } catch (Throwable ignored) {
+        } finally {
+            telephonyListener = null;
+        }
+    }
+
+    private synchronized void handleCallState(int state, String number) {
+        if (number != null && !number.trim().isEmpty()) {
+            lastRingingNumber = number.trim();
+        }
+        if (state == TelephonyManager.CALL_STATE_RINGING) {
+            wasRinging = true;
+            if (!incomingSent) {
+                incomingSent = true;
+                incomingNumberSent = !lastRingingNumber.isEmpty();
+                sendCallEvent("incoming", lastRingingNumber);
+            } else if (!incomingNumberSent && !lastRingingNumber.isEmpty()) {
+                // First event had a hidden/empty number; now it is known.
+                incomingNumberSent = true;
+                sendCallEvent("incoming", lastRingingNumber);
+            }
+        } else if (state == TelephonyManager.CALL_STATE_OFFHOOK) {
+            wasOffhook = true;
+        } else if (state == TelephonyManager.CALL_STATE_IDLE) {
+            if (wasRinging && !wasOffhook) {
+                sendCallEvent("missed", lastRingingNumber);
+            } else if (wasOffhook) {
+                sendCallEvent("ended", lastRingingNumber);
+            }
+            wasRinging = false;
+            wasOffhook = false;
+            incomingSent = false;
+            incomingNumberSent = false;
+            lastRingingNumber = "";
+        }
+    }
+
     private void sendCallEvent(String event, String number) {
         final String num = number == null ? "" : number;
         io.execute(() -> {
             PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
             PowerManager.WakeLock wl = pm != null
                     ? pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "zadachi:call") : null;
-            if (wl != null) wl.acquire(15000);
+            if (wl != null) wl.acquire(20000);
             try {
                 Prefs prefs = new Prefs(getApplicationContext());
                 String json = "{\"event\":\"" + Net.jsonEscape(event) + "\""
@@ -172,9 +269,15 @@ public class CallService extends Service {
                     if (pc != null) {
                         prefs.setPcIp(pc.ip);
                         prefs.setPcPort(pc.port);
-                        tryPostCall(pc.ip, pc.port, json, prefs.token());
+                        sent = tryPostCall(pc.ip, pc.port, json, prefs.token());
                     }
                 }
+                String when = new java.text.SimpleDateFormat(
+                        "dd.MM HH:mm:ss", java.util.Locale.getDefault())
+                        .format(new java.util.Date());
+                prefs.setLastEvent(when + " • " + event + " "
+                        + (num.isEmpty() ? "(номер скрыт)" : num)
+                        + (sent ? " • отправлено на ПК ✔" : " • не отправлено на ПК ✘"));
             } finally {
                 if (wl != null && wl.isHeld()) wl.release();
             }
