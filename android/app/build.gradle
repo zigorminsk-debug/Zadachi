@@ -1,0 +1,48 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'by.zadachi.calls'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId 'by.zadachi.calls'
+        minSdk 26
+        targetSdk 34
+        versionCode 1
+        versionName '1.0.0'
+    }
+
+    // Permanent release key (committed on purpose so every build on
+    // GitHub Actions is signed identically and updates install cleanly).
+    // Keep this repository private, or move the passwords to GitHub
+    // Secrets and delete key.properties from the repo.
+    signingConfigs {
+        release {
+            storeFile file('../keystore/zadachi-release.keystore')
+            storePassword 'Zadachi2026!'
+            keyAlias 'zadachi'
+            keyPassword 'Zadachi2026!'
+        }
+    }
+
+    buildTypes {
+        release {
+            signingConfig signingConfigs.release
+            minifyEnabled false
+        }
+        debug {
+            applicationIdSuffix '.debug'
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+// Deliberately empty: only the Android SDK is used (battery & size).
+dependencies {
+}
