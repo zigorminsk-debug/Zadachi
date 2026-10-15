@@ -25,6 +25,7 @@ from tkinter import messagebox, ttk
 
 from . import autostart as autostart_mod
 from . import protocol
+from . import telhandler
 from .config import Settings
 from .db import Database
 from .server import CallServer
@@ -166,6 +167,8 @@ class ZadachiApp(tk.Tk):
 
         self._build_ui()
         self._apply_autostart()
+        if self.settings.get("tel_handler", True):
+            telhandler.set_tel_handler(True)
         try:
             self.server.start()
             self._set_status(f"Сервер запущен, порт {self.server.pc_port}. "
@@ -271,11 +274,13 @@ class ZadachiApp(tk.Tk):
                                            or bool(self.settings.get("autostart", True)))
         self.tray_var = tk.BooleanVar(value=bool(self.settings.get("minimize_to_tray", True)))
         self.clip_var = tk.BooleanVar(value=bool(self.settings.get("clipboard_watch", True)))
+        self.tel_var = tk.BooleanVar(value=bool(self.settings.get("tel_handler", True)))
         self.sound_var = tk.BooleanVar(value=bool(self.settings.get("sound", True)))
         for i, (var, text) in enumerate((
                 (self.autostart_var, "Запускать вместе с Windows (фон)"),
                 (self.tray_var, "Закрытие окна — сворачивать в трей"),
                 (self.clip_var, "Следить за буфером обмена (номера для звонка)"),
+                (self.tel_var, "Номера-ссылки tel: на сайтах — звонить через телефон"),
                 (self.sound_var, "Звук напоминаний"))):
             ttk.Checkbutton(grid, text=text, variable=var,
                             command=self._save_toggles).grid(row=2 + i, column=0, columnspan=2, sticky="w", pady=2)
@@ -284,6 +289,10 @@ class ZadachiApp(tk.Tk):
             "Как пользоваться:\n"
             "• Телефон и ПК должны быть в одной Wi-Fi сети (укажите её в Android-приложении).\n"
             "• При входящем звонке на телефоне здесь всплывёт окно — запишите заявку и таймер.\n"
+            "• Клик по номеру-ссылке (tel:) на любом сайте — звонок уходит на телефон\n"
+            "  (при первом клике браузер может попросить выбрать Zadachi). \n"
+            "• Клик по номеру-ссылке (tel:) на любом сайте — звонок уходит на телефон\n"
+            "  (при первом клике браузер может попросить выбрать Zadachi).\n"
             "• Скопируйте любой номер на ПК — появится кнопка звонка; либо нажмите Ctrl+Alt+D,\n"
             "  и номер из буфера уйдёт в звонилку телефона.\n"
             "• Разрешите в брандмауэре Windows порты TCP 39272 и UDP 39271 для локальной сети."
@@ -667,8 +676,10 @@ class ZadachiApp(tk.Tk):
         self.settings.set("autostart", bool(self.autostart_var.get()))
         self.settings.set("minimize_to_tray", bool(self.tray_var.get()))
         self.settings.set("clipboard_watch", bool(self.clip_var.get()))
+        self.settings.set("tel_handler", bool(self.tel_var.get()))
         self.settings.set("sound", bool(self.sound_var.get()))
         autostart_mod.set_autostart(bool(self.autostart_var.get()))
+        telhandler.set_tel_handler(bool(self.tel_var.get()))
 
     # ---------------------------------------------------------------- tray
     def _restore(self):
@@ -705,8 +716,74 @@ class ZadachiApp(tk.Tk):
             self.destroy()
 
 
+def run_call_request(number: str) -> bool:
+    """Handle `Zadachi.exe --call tel:+375...` (browser click on a number).
+
+    Sends the number straight to the phone and shows a small result
+    window. Returns False only when the phone is not paired yet — the
+    caller then opens the full app so the user can finish setup.
+    Does not start the HTTP server or a second full instance.
+    """
+    settings = Settings()
+    ip = settings.get("phone_ip", "")
+    if not ip:
+        root = tk.Tk()
+        root.withdraw()
+        messagebox.showwarning(
+            "Zadachi",
+            f"Номер {number} получен, но телефон ещё не сопряжён.\n"
+            "Откроется Zadachi: совершите тестовый звонок с телефона "
+            "или укажите IP телефона в «Настройках».", parent=root)
+        root.destroy()
+        return False
+
+    db = Database()
+    root = tk.Tk()
+    root.title("Zadachi — звонок")
+    root.geometry("380x140")
+    root.attributes("-topmost", True)
+    if sys.platform == "win32":
+        icon = find_icon_path()
+        if icon:
+            try:
+                root.iconbitmap(default=icon)
+            except tk.TclError:
+                pass
+    status = tk.StringVar(value=f"Отправляю {number} на телефон…")
+    ttk.Label(root, textvariable=status, wraplength=340,
+              font=("Segoe UI", 11)).pack(padx=14, pady=(16, 8))
+    ttk.Button(root, text="Закрыть", command=root.destroy).pack(pady=4)
+
+    def worker():
+        try:
+            protocol.send_dial(ip, number, settings.get("token", ""))
+            db.add_call(number, status="outgoing", note="Клик по номеру (tel:)")
+            db.close()
+
+            def done():
+                status.set(f"✔ Номер {number} открыт в звонилке телефона")
+                root.after(2500, root.destroy)
+            root.after(0, done)
+        except Exception as exc:
+            db.close()
+
+            def fail():
+                status.set(
+                    f"✘ Телефон {ip} не ответил.\n"
+                    "Проверьте: телефон в разрешённой Wi-Fi сети, Zadachi на нём "
+                    f"активна, токены совпадают.\n({exc})")
+            root.after(0, fail)
+
+    threading.Thread(target=worker, daemon=True).start()
+    root.mainloop()
+    return True
+
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
+    number = protocol.parse_call_argument(argv)
+    if number and run_call_request(number):
+        return
     app = ZadachiApp(start_in_tray="--tray" in argv)
     app.mainloop()
 

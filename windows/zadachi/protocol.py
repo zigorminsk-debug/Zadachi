@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import re
 import socket
+import urllib.parse
 import urllib.request
 import urllib.error
 
@@ -72,6 +73,32 @@ def extract_phones(text: str):
                 seen.add(n)
                 found.append(n)
     return found
+
+
+def extract_number_from_uri(value: str) -> str:
+    """'tel:+375 (29) 123-45-67' / 'callto:%2B375...' / 'tel:+375...;ext=1'
+    -> normalized number, or '' if it is not a usable phone URI."""
+    if not value:
+        return ""
+    s = urllib.parse.unquote(str(value)).strip().strip('"')
+    m = re.match(r"(?i)^(tel|callto|phone):(.*)$", s)
+    if m:
+        s = m.group(2)
+    # drop URI parameters (?..., ;ext=...) and any trailing junk
+    s = re.split(r"[;?#]", s)[0]
+    number = normalize_phone(s)
+    return number if is_phone_like(number) else ""
+
+
+def parse_call_argument(argv):
+    """Find --call <uri> or a bare tel:/callto: argument. Returns number or ''."""
+    args = list(argv or [])
+    for i, a in enumerate(args):
+        if a == "--call" and i + 1 < len(args):
+            return extract_number_from_uri(args[i + 1])
+        if isinstance(a, str) and re.match(r"(?i)^(tel|callto):", a.strip()):
+            return extract_number_from_uri(a)
+    return ""
 
 
 def _post_json(url: str, payload: dict, token: str = "", timeout: float = 4.0):

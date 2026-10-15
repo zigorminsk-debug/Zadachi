@@ -12,6 +12,7 @@ DEFAULTS = {
     "autostart": True,
     "minimize_to_tray": True,
     "clipboard_watch": True,
+    "tel_handler": True,    # handle tel:/callto: links from browsers
     "sound": True,
     "reminder_sound_repeat": True,
 }

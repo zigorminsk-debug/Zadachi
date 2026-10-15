@@ -7,9 +7,9 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "windows"))
 
-from zadachi import autostart, protocol          # noqa: E402
-from zadachi.db import Database                  # noqa: E402
-from zadachi.tray import TrayIcon                # noqa: E402
+from zadachi import autostart, protocol, telhandler  # noqa: E402
+from zadachi.db import Database                      # noqa: E402
+from zadachi.tray import TrayIcon                    # noqa: E402
 
 
 class PhoneUtilsTest(unittest.TestCase):
@@ -27,6 +27,34 @@ class PhoneUtilsTest(unittest.TestCase):
     def test_not_phone(self):
         self.assertFalse(protocol.is_phone_like("12.05.2026"))
         self.assertEqual(protocol.extract_phones("завтра в 15:00"), [])
+
+
+class TelLinkTest(unittest.TestCase):
+    """Clicking a phone number on a web page arrives as a tel: URI."""
+
+    def test_tel_uri(self):
+        self.assertEqual(protocol.extract_number_from_uri("tel:+375 (29) 123-45-67"),
+                         "+375291234567")
+        self.assertEqual(protocol.extract_number_from_uri("callto:%2B375291234567"),
+                         "+375291234567")
+        self.assertEqual(protocol.extract_number_from_uri("tel:+375291234567;ext=12"),
+                         "+375291234567")
+
+    def test_parse_call_argument(self):
+        self.assertEqual(protocol.parse_call_argument(["--call", "tel:80291234567"]),
+                         "+375291234567")
+        self.assertEqual(protocol.parse_call_argument(["tel:+375291234567"]),
+                         "+375291234567")
+        self.assertEqual(protocol.parse_call_argument(["--tray"]), "")
+        self.assertEqual(protocol.parse_call_argument(["--call", "https://example.com"]), "")
+
+    def test_handler_command_and_offwindows_noop(self):
+        self.assertIn('--call "%1"', telhandler._handler_command())
+        # Registry functions must be harmless on non-Windows (CI/dev).
+        import sys
+        if sys.platform != "win32":
+            self.assertFalse(telhandler.is_tel_handler_registered())
+            self.assertFalse(telhandler.set_tel_handler(True))
 
 
 class DatabaseTest(unittest.TestCase):

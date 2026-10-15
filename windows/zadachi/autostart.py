@@ -11,15 +11,20 @@ RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 VALUE_NAME = "Zadachi"
 
 
-def _launch_command() -> str:
-    # --tray: autostart launches into the background; a manual double-click
-    # (no argument) always opens the window.
+def _base_launch_command() -> str:
+    """Just the program, no arguments (used by autostart and tel: handler)."""
     if getattr(sys, "frozen", False):  # PyInstaller .exe
-        return f'"{sys.executable}" --tray'
+        return f'"{sys.executable}"'
     # dev mode: pythonw Zadachi.py
     script = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "Zadachi.py")
     pyw = sys.executable.replace("python.exe", "pythonw.exe")
-    return f'"{pyw}" "{script}" --tray'
+    return f'"{pyw}" "{script}"'
+
+
+def _launch_command() -> str:
+    # --tray: autostart launches into the background; a manual double-click
+    # (no argument) always opens the window.
+    return _base_launch_command() + " --tray"
 
 
 def is_autostart_enabled() -> bool:
