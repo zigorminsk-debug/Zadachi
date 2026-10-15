@@ -130,6 +130,21 @@ def log_error(context: str):
         pass
 
 
+def find_icon_path():
+    """icon.ico: PyInstaller bundle (_MEIPASS) / beside the exe / repo."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    candidates = [
+        os.path.join(getattr(sys, "_MEIPASS", ""), "icon.ico"),
+        os.path.join(os.path.dirname(sys.executable), "icon.ico"),
+        os.path.join(os.path.dirname(here), "icon.ico"),          # windows/icon.ico (dev)
+        os.path.join(os.getcwd(), "icon.ico"),
+    ]
+    for p in candidates:
+        if p and os.path.isfile(p):
+            return p
+    return ""
+
+
 class ZadachiApp(tk.Tk):
     def __init__(self, start_in_tray: bool = False):
         super().__init__()
@@ -161,7 +176,8 @@ class ZadachiApp(tk.Tk):
         # Tray is optional decoration: it must NEVER kill the app window.
         if self.settings.get("minimize_to_tray", True):
             try:
-                self.tray = TrayIcon(self, self._restore, self._tray_menu)
+                self.tray = TrayIcon(self, self._restore, self._tray_menu,
+                                     icon_path=self._icon_path)
             except Exception:
                 self.tray = None
                 log_error("tray icon init failed (continuing without tray)")

@@ -71,6 +71,10 @@ python -m unittest discover -s tests   # тесты ядра (без GUI)
 cd windows && python Zadachi.py        # запуск из исходников (нужен Python 3.11+)
 ```
 
+Значки приложений (`windows/icon.ico`, Android `mipmap-*`) сгенерированы из
+одного исходника скриптом `tools/make_icons.py` (нужен Pillow только для
+перегенерации; сами сборки работают по готовым файлам).
+
 Структура: `windows/zadachi/` — приложение (БД, сервер, GUI, трей, автозагрузка),
 `android/app/src/main/java/by/zadachi/calls/` — Android (MainActivity, CallService,
 WifiGate, Net), `tests/` — юнит-тесты ядра.

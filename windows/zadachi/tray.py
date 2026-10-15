@@ -28,10 +28,11 @@ HWND_MESSAGE = -3
 
 
 class TrayIcon:
-    def __init__(self, root, on_restore, on_menu=None):
+    def __init__(self, root, on_restore, on_menu=None, icon_path=""):
         self.root = root
         self.on_restore = on_restore
         self.on_menu = on_menu
+        self.icon_path = icon_path or ""
         self._added = False
         self._hwnd = None
         if sys.platform == "win32":
@@ -124,12 +125,24 @@ class TrayIcon:
         self._nid.uID = 1
         self._nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP
         self._nid.uCallbackMessage = WM_TRAY
-        self._nid.hIcon = user32.LoadIconW(0, ctypes.cast(IDI_APPLICATION, ctypes.c_void_p))
+        self._nid.hIcon = self._load_icon(user32)
         self._nid.szTip = "Zadachi — звонки и задачи"
 
         if not shell32.Shell_NotifyIconW(NIM_ADD, ctypes.byref(self._nid)):
             raise OSError("Shell_NotifyIconW(NIM_ADD) failed")
         self._added = True
+
+    def _load_icon(self, user32):
+        """App icon from the .ico file, stock application icon as fallback."""
+        import ctypes
+        import os
+        if self.icon_path and os.path.isfile(self.icon_path):
+            IMAGE_ICON, LR_LOADFROMFILE = 1, 0x0010
+            hicon = user32.LoadImageW(None, self.icon_path, IMAGE_ICON, 0, 0,
+                                      LR_LOADFROMFILE)
+            if hicon:
+                return hicon
+        return user32.LoadIconW(0, ctypes.cast(IDI_APPLICATION, ctypes.c_void_p))
 
     def remove(self):
         if not self._added:

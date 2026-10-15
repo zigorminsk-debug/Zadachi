@@ -58,6 +58,32 @@ class DatabaseTest(unittest.TestCase):
         self.assertEqual(self.db.list_tasks(), [])
 
 
+class IconAssetsTest(unittest.TestCase):
+    ROOT = os.path.join(os.path.dirname(__file__), "..")
+
+    def _png_size(self, path):
+        import struct
+        with open(path, "rb") as f:
+            head = f.read(24)
+        self.assertEqual(head[:8], b"\x89PNG\r\n\x1a\n")
+        return struct.unpack(">II", head[16:24])
+
+    def test_windows_ico(self):
+        path = os.path.join(self.ROOT, "windows", "icon.ico")
+        self.assertTrue(os.path.isfile(path))
+        with open(path, "rb") as f:
+            self.assertEqual(f.read(4), b"\x00\x00\x01\x00")  # ICO magic
+
+    def test_android_launcher_sizes(self):
+        res = os.path.join(self.ROOT, "android", "app", "src", "main", "res")
+        self.assertEqual(self._png_size(os.path.join(
+            res, "mipmap-xxxhdpi", "ic_launcher.png")), (192, 192))
+        self.assertEqual(self._png_size(os.path.join(
+            res, "mipmap-xxxhdpi", "ic_launcher_foreground.png")), (432, 432))
+        import xml.etree.ElementTree as ET
+        ET.parse(os.path.join(res, "mipmap-anydpi-v26", "ic_launcher.xml"))
+
+
 class StartupTest(unittest.TestCase):
     def test_autostart_goes_to_tray_but_manual_launch_does_not(self):
         # Autostart entry must start hidden; the exe itself without
