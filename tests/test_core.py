@@ -86,6 +86,38 @@ class DatabaseTest(unittest.TestCase):
         self.assertEqual(self.db.list_tasks(), [])
 
 
+class ServerTest(unittest.TestCase):
+    def test_health_and_call_identify_as_zadachi(self):
+        import json
+        import queue
+        import urllib.error
+        import urllib.request
+        from zadachi.server import CallServer
+
+        events = queue.Queue()
+        server = CallServer("secret", events, pc_port=0).start()
+        try:
+            base = f"http://127.0.0.1:{server.pc_port}"
+            with urllib.request.urlopen(base + "/api/health", timeout=3) as r:
+                self.assertEqual(json.load(r)["app"], "Zadachi-PC")
+            # Wrong token -> JSON 403 (never an HTML error page).
+            req = urllib.request.Request(base + "/api/call", data=b"{}", method="POST")
+            with self.assertRaises(urllib.error.HTTPError) as ctx:
+                urllib.request.urlopen(req, timeout=3)
+            self.assertEqual(ctx.exception.code, 403)
+            self.assertIn("Zadachi-PC", ctx.exception.read().decode())
+            # Correct token -> event is queued for the GUI.
+            req = urllib.request.Request(
+                base + "/api/call", method="POST",
+                data=json.dumps({"event": "incoming", "number": "+375291234567"}).encode(),
+                headers={"X-Zadachi-Token": "secret", "Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=3) as r:
+                self.assertTrue(json.load(r)["ok"])
+            self.assertEqual(events.get_nowait()["payload"]["number"], "+375291234567")
+        finally:
+            server.stop()
+
+
 class IconAssetsTest(unittest.TestCase):
     ROOT = os.path.join(os.path.dirname(__file__), "..")
 
@@ -123,6 +155,23 @@ class IconAssetsTest(unittest.TestCase):
         base = root.find("base-config")
         self.assertIsNotNone(base)
         self.assertEqual(base.get("cleartextTrafficPermitted"), "true")
+
+
+class AndroidPairingTest(unittest.TestCase):
+    def test_phone_verifies_pc_identity_before_test_call(self):
+        # Regression: a manually typed IP may lead to some other HTTP
+        # server, which answered the test with an HTML "HTTP 501" page.
+        # The phone must check /api/health says Zadachi-PC, fall back to
+        # discovery, and use the values actually typed in the fields.
+        base = os.path.join(os.path.dirname(__file__), "..", "android",
+                            "app", "src", "main", "java", "by", "zadachi", "calls")
+        net = open(os.path.join(base, "Net.java"), encoding="utf-8").read()
+        main = open(os.path.join(base, "MainActivity.java"), encoding="utf-8").read()
+        self.assertIn("isZadachiPc", net)
+        self.assertIn("/api/health", net)
+        self.assertIn("discoverPc", net)
+        self.assertIn("syncPairingFromFields", main)
+        self.assertIn("Net.isZadachiPc(ip, port)", main)
 
 
 class AndroidManifestTest(unittest.TestCase):

@@ -156,28 +156,39 @@ public class CallService extends Service {
             if (wl != null) wl.acquire(15000);
             try {
                 Prefs prefs = new Prefs(getApplicationContext());
-                String ip = prefs.pcIp();
-                if (ip.isEmpty()) {
-                    ip = Net.discoverPcIp();
-                    if (!ip.isEmpty()) {
-                        prefs.setPcIp(ip);
-                        // port might come in discovery reply; default is fixed
-                        prefs.setPcPort(39272);
-                    }
-                }
-                if (ip.isEmpty()) return;
                 String json = "{\"event\":\"" + Net.jsonEscape(event) + "\""
                         + ",\"number\":\"" + Net.jsonEscape(num) + "\""
                         + ",\"device\":\"" + Net.jsonEscape(Net.deviceName()) + "\""
                         + ",\"ts\":" + System.currentTimeMillis() + "}";
-                Net.postJson("http://" + ip + ":" + prefs.pcPort() + "/api/call",
-                        json, prefs.token(), 4000);
-            } catch (Exception ignored) {
-                // PC offline: nothing to do, never retry in a loop (battery).
+                boolean sent = false;
+                String ip = prefs.pcIp();
+                if (!ip.isEmpty()) {
+                    sent = tryPostCall(ip, prefs.pcPort(), json, prefs.token());
+                }
+                if (!sent) {
+                    // Saved IP may be stale or point at another server:
+                    // one discovery attempt, then give up (battery).
+                    Net.PcEndpoint pc = Net.discoverPc();
+                    if (pc != null) {
+                        prefs.setPcIp(pc.ip);
+                        prefs.setPcPort(pc.port);
+                        tryPostCall(pc.ip, pc.port, json, prefs.token());
+                    }
+                }
             } finally {
                 if (wl != null && wl.isHeld()) wl.release();
             }
         });
+    }
+
+    private boolean tryPostCall(String ip, int port, String json, String token) {
+        try {
+            String body = Net.postJson("http://" + ip + ":" + port + "/api/call",
+                    json, token, 4000);
+            return body != null && body.contains("\"ok\":true");
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     // ------------------------------------------------------------ dial server

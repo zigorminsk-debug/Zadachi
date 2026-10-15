@@ -118,8 +118,7 @@ public class MainActivity extends Activity {
         Button save = new Button(this);
         save.setText("Сохранить сопряжение");
         save.setOnClickListener(v -> {
-            prefs.setToken(tokenInput.getText().toString());
-            prefs.setPcIp(pcIpInput.getText().toString());
+            syncPairingFromFields();
             toast("Сохранено");
             WifiGate.evaluate(this);
         });
@@ -128,14 +127,15 @@ public class MainActivity extends Activity {
         Button discover = new Button(this);
         discover.setText("Найти ПК автоматически");
         discover.setOnClickListener(v -> Executors.newSingleThreadExecutor().execute(() -> {
-            String ip = Net.discoverPcIp();
+            Net.PcEndpoint pc = Net.discoverPc();
             runOnUiThread(() -> {
-                if (ip.isEmpty()) {
+                if (pc == null) {
                     toast("ПК не найден. Одна Wi-Fi сеть? Zadachi запущена на ПК?");
                 } else {
-                    prefs.setPcIp(ip);
-                    pcIpInput.setText(ip);
-                    toast("Найден ПК: " + ip);
+                    prefs.setPcIp(pc.ip);
+                    prefs.setPcPort(pc.port);
+                    pcIpInput.setText(pc.ip);
+                    toast("Найден ПК: " + pc.ip + ":" + pc.port);
                 }
             });
         }));
@@ -144,27 +144,57 @@ public class MainActivity extends Activity {
         Button test = new Button(this);
         test.setText("Тест: тестовый звонок на ПК");
         test.setOnClickListener(v -> {
+            // What the user sees in the fields is what the test must use,
+            // even if they forgot to press "Сохранить сопряжение".
+            syncPairingFromFields();
             if (prefs.allowedSsids().isEmpty()) {
                 toast("Внимание: список разрешённых Wi-Fi пуст — реальные звонки "
                         + "отслеживаться не будут. Нажмите «Разрешить текущую сеть». "
                         + "Тест всё равно отправляю.");
             }
-            Executors.newSingleThreadExecutor().execute(() -> {
-            String ip = prefs.pcIp().isEmpty() ? Net.discoverPcIp() : prefs.pcIp();
-            if (!ip.isEmpty()) prefs.setPcIp(ip);
-            String err = "";
-            try {
-                if (ip.isEmpty()) throw new Exception("ПК не найден");
-                String json = "{\"event\":\"incoming\",\"number\":\"+375290000000\""
-                        + ",\"device\":\"test\"}";
-                Net.postJson("http://" + ip + ":" + prefs.pcPort() + "/api/call",
-                        json, prefs.token(), 4000);
-            } catch (Exception e) {
-                err = e.getMessage();
+            if (prefs.token().isEmpty()) {
+                toast("Токен не заполнен: если на ПК задан токен, ПК отклонит тест. "
+                        + "Продолжаю проверку…");
             }
-            final String msg = err.isEmpty()
-                    ? "Тест отправлен — на ПК должно всплыть окно" : "Ошибка: " + err;
-            runOnUiThread(() -> toast(msg));
+            Executors.newSingleThreadExecutor().execute(() -> {
+                String ip = prefs.pcIp();
+                int port = prefs.pcPort();
+                String note = "";
+                String err = "";
+                try {
+                    boolean verified = Net.isZadachiPc(ip, port);
+                    if (!verified) {
+                        Net.PcEndpoint found = Net.discoverPc();
+                        if (found != null && Net.isZadachiPc(found.ip, found.port)) {
+                            ip = found.ip;
+                            port = found.port;
+                            prefs.setPcIp(ip);
+                            prefs.setPcPort(port);
+                            verified = true;
+                            note = "Нашёл настоящий ПК: " + ip + ":" + port + ". ";
+                        }
+                    }
+                    if (ip.isEmpty()) throw new Exception("ПК не найден. Запустите Zadachi на ПК и нажмите «Найти ПК автоматически»");
+                    if (!verified) {
+                        throw new Exception("По адресу " + ip + ":" + port
+                                + " отвечает не Zadachi (или Zadachi на ПК не запущена). "
+                                + "Проверьте IP либо воспользуйтесь автопоиском.");
+                    }
+                    String json = "{\"event\":\"incoming\",\"number\":\"+375290000000\""
+                            + ",\"device\":\"test\"}";
+                    Net.postJson("http://" + ip + ":" + port + "/api/call",
+                            json, prefs.token(), 4000);
+                } catch (Exception e) {
+                    err = e.getMessage();
+                }
+                final String usedIp = ip;
+                final String msg = err.isEmpty()
+                        ? note + "Тест отправлен на " + usedIp + " — на ПК должно всплыть окно"
+                        : "Ошибка: " + err;
+                runOnUiThread(() -> {
+                    if (!usedIp.isEmpty()) pcIpInput.setText(usedIp);
+                    toast(msg);
+                });
             });
         });
         root.addView(test);
@@ -195,6 +225,12 @@ public class MainActivity extends Activity {
         scroll.addView(root, new ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         setContentView(scroll);
+    }
+
+    /** Persist whatever is currently typed in the pairing fields. */
+    private void syncPairingFromFields() {
+        if (tokenInput != null) prefs.setToken(tokenInput.getText().toString());
+        if (pcIpInput != null) prefs.setPcIp(pcIpInput.getText().toString());
     }
 
     private void rebuildSsidList() {

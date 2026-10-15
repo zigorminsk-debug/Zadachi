@@ -23,6 +23,16 @@ final class Net {
     static final int PHONE_PORT = 39273;
     static final String DISCOVERY = "ZADACHI_DISCOVER_PC";
 
+    static final class PcEndpoint {
+        final String ip;
+        final int port;
+
+        PcEndpoint(String ip, int port) {
+            this.ip = ip;
+            this.port = port;
+        }
+    }
+
     private Net() {}
 
     static String currentSsid(Context c) {
@@ -72,6 +82,7 @@ final class Net {
         }
         conn.setDoOutput(true);
         byte[] body = json.getBytes(StandardCharsets.UTF_8);
+        conn.setFixedLengthStreamingMode(body.length);
         try (OutputStream os = conn.getOutputStream()) {
             os.write(body);
         }
@@ -79,8 +90,45 @@ final class Net {
         InputStream is = code >= 400 ? conn.getErrorStream() : conn.getInputStream();
         String resp = readAll(is);
         conn.disconnect();
-        if (code >= 400) throw new Exception("HTTP " + code + ": " + resp);
+        if (code >= 400) throw new Exception(friendlyHttpError(code, resp));
         return resp;
+    }
+
+    /** GET text/JSON; throws a user-readable exception on HTTP errors. */
+    static String get(String urlStr, int timeoutMs) throws Exception {
+        HttpURLConnection conn = (HttpURLConnection) new URL(urlStr).openConnection();
+        conn.setConnectTimeout(timeoutMs);
+        conn.setReadTimeout(timeoutMs);
+        conn.setRequestMethod("GET");
+        int code = conn.getResponseCode();
+        InputStream is = code >= 400 ? conn.getErrorStream() : conn.getInputStream();
+        String resp = readAll(is);
+        conn.disconnect();
+        if (code >= 400) throw new Exception(friendlyHttpError(code, resp));
+        return resp;
+    }
+
+    static String friendlyHttpError(int code, String resp) {
+        String body = resp == null ? "" : resp.trim();
+        if (body.startsWith("<") || body.contains("<html")) {
+            // Our PC API always answers JSON. HTML means some other HTTP
+            // server (router, another program) sits on this IP/port.
+            return "HTTP " + code + " — по этому адресу отвечает не Zadachi, "
+                    + "а другой сервер. Проверьте IP ПК или нажмите «Найти ПК автоматически»";
+        }
+        if (body.length() > 180) body = body.substring(0, 180) + "…";
+        return "HTTP " + code + (body.isEmpty() ? "" : ": " + body);
+    }
+
+    /** True only if http://ip:port/api/health answers as Zadachi-PC. */
+    static boolean isZadachiPc(String ip, int port) {
+        if (ip == null || ip.trim().isEmpty()) return false;
+        try {
+            String body = get("http://" + ip.trim() + ":" + port + "/api/health", 2500);
+            return "Zadachi-PC".equals(extractJsonString(body, "app"));
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     private static String readAll(InputStream is) throws Exception {
@@ -93,10 +141,12 @@ final class Net {
     }
 
     /**
-     * Broadcast discovery of the PC. Returns PC IP or "".
+     * Broadcast discovery of the PC. Returns endpoint or null.
      * One short UDP exchange — no scanning loops (battery friendly).
+     * The reply is validated (must identify itself as Zadachi-PC) and its
+     * advertised port is honoured.
      */
-    static String discoverPcIp() {
+    static PcEndpoint discoverPc() {
         DatagramSocket socket = null;
         try {
             socket = new DatagramSocket();
@@ -109,12 +159,22 @@ final class Net {
             byte[] buf = new byte[1024];
             DatagramPacket reply = new DatagramPacket(buf, buf.length);
             socket.receive(reply);
-            return reply.getAddress().getHostAddress();
+            String body = new String(reply.getData(), reply.getOffset(),
+                    reply.getLength(), StandardCharsets.UTF_8);
+            if (!"Zadachi-PC".equals(extractJsonString(body, "app"))) return null;
+            int port = extractJsonInt(body, "port", 39272);
+            return new PcEndpoint(reply.getAddress().getHostAddress(), port);
         } catch (Exception e) {
-            return "";
+            return null;
         } finally {
             if (socket != null) socket.close();
         }
+    }
+
+    /** Backwards-compatible: just the IP, or "" when not found. */
+    static String discoverPcIp() {
+        PcEndpoint pc = discoverPc();
+        return pc == null ? "" : pc.ip;
     }
 
     static String deviceName() {
