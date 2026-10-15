@@ -143,7 +143,13 @@ public class MainActivity extends Activity {
 
         Button test = new Button(this);
         test.setText("Тест: тестовый звонок на ПК");
-        test.setOnClickListener(v -> Executors.newSingleThreadExecutor().execute(() -> {
+        test.setOnClickListener(v -> {
+            if (prefs.allowedSsids().isEmpty()) {
+                toast("Внимание: список разрешённых Wi-Fi пуст — реальные звонки "
+                        + "отслеживаться не будут. Нажмите «Разрешить текущую сеть». "
+                        + "Тест всё равно отправляю.");
+            }
+            Executors.newSingleThreadExecutor().execute(() -> {
             String ip = prefs.pcIp().isEmpty() ? Net.discoverPcIp() : prefs.pcIp();
             if (!ip.isEmpty()) prefs.setPcIp(ip);
             String err = "";
@@ -159,7 +165,8 @@ public class MainActivity extends Activity {
             final String msg = err.isEmpty()
                     ? "Тест отправлен — на ПК должно всплыть окно" : "Ошибка: " + err;
             runOnUiThread(() -> toast(msg));
-        }));
+            });
+        });
         root.addView(test);
 
         root.addView(label("Разрешения и батарея", 16, true));

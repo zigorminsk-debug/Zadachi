@@ -111,6 +111,19 @@ class IconAssetsTest(unittest.TestCase):
         import xml.etree.ElementTree as ET
         ET.parse(os.path.join(res, "mipmap-anydpi-v26", "ic_launcher.xml"))
 
+    def test_android_allows_lan_http(self):
+        # Regression: Android 9+ blocks cleartext HTTP by default, which
+        # broke the "test call" (Cleartext HTTP traffic ... not permitted).
+        import xml.etree.ElementTree as ET
+        app = os.path.join(self.ROOT, "android", "app", "src", "main")
+        manifest = open(os.path.join(app, "AndroidManifest.xml"), encoding="utf-8").read()
+        self.assertIn("@xml/network_security_config", manifest)
+        cfg_path = os.path.join(app, "res", "xml", "network_security_config.xml")
+        root = ET.parse(cfg_path).getroot()
+        base = root.find("base-config")
+        self.assertIsNotNone(base)
+        self.assertEqual(base.get("cleartextTrafficPermitted"), "true")
+
 
 class StartupTest(unittest.TestCase):
     def test_autostart_goes_to_tray_but_manual_launch_does_not(self):

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!--
+      Zadachi talks only to the user's own PC on the local Wi-Fi network.
+      That PC has no TLS certificate, and LAN destinations are raw IP
+      addresses, so cleartext HTTP must be permitted for the app to reach
+      it at all (Android 9+ blocks it by default). The app never contacts
+      internet servers: every URL is built from the user-configured PC IP
+      or from a PC discovered by UDP broadcast on the local network, and
+      requests are authenticated with the pairing token.
+    -->
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>
