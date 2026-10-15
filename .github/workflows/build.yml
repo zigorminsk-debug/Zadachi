@@ -59,10 +59,12 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-      - name: Install platform 35
-        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+      # GitHub runners ship the Android SDK ($ANDROID_HOME); just add platform 35.
+      - name: Install Android platform 35
+        run: |
+          export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH"
+          yes | sdkmanager --licenses > /dev/null 2>&1 || true
+          sdkmanager "platforms;android-35" "build-tools;35.0.0"
       - name: Verify permanent signing key
         run: keytool -list -keystore android/keystore/zadachi-release.keystore -storepass 'Zadachi2026!' -alias zadachi
       - name: Build release APK
